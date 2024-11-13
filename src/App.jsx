@@ -24,43 +24,75 @@ const WalletAnalysisDashboard = () => {
 
     setLoading(true);
     setError('');
-
+    
     try {
-      // In production, replace with actual API call
-      await new Promise(resolve => setTimeout(resolve, 1500)); // Simulate API call
+      const response = await fetch(`http://localhost:8000/analyze/${address}`);
+      if (!response.ok) {
+        throw new Error('Failed to fetch wallet data');
+      }
       
-      // Mock data for demonstration
+      const data = await response.json();
       setAnalysisData({
         profile: {
-          status: 'Active Trader',
-          riskLevel: 'Low',
-          activityLevel: 'Medium',
-          mainActivity: 'DeFi Trading',
-          lastActive: '2 hours ago',
-          totalValue: '$25,000'
+          status: data.profile_type,
+          riskLevel: data.risk_level,
+          activityLevel: data.activity_level,
+          mainActivity: data.main_activity,
+          lastActive: data.last_active,
+          totalValue: `$${data.total_value_usd}`
         },
         portfolio: {
-          eth: 60,
-          usdc: 40
+          eth: data.portfolio.eth_percentage,
+          usdc: data.portfolio.usdc_percentage
         },
-        recentTransactions: [
-          { type: 'Added Liquidity', protocol: 'Uniswap', value: '$5,000' },
-          { type: 'Borrowed', protocol: 'Aave', value: '$3,000' },
-          { type: 'Swap', protocol: 'Uniswap', value: '$2,000' }
-        ],
-        activityData: [
-          { month: 'Jan', transactions: 45 },
-          { month: 'Feb', transactions: 52 },
-          { month: 'Mar', transactions: 38 },
-          { month: 'Apr', transactions: 41 },
-          { month: 'May', transactions: 35 }
-        ]
+        recentTransactions: data.recent_transactions.map(tx => ({
+          type: tx.type,
+          protocol: tx.protocol,
+          value: `$${tx.value_usd}`
+        })),
+        activityData: data.activity_history
       });
     } catch (err) {
-      setError('Failed to fetch wallet analysis. Please try again.');
+      setError('Failed to fetch wallet analysis: ' + err.message);
     } finally {
       setLoading(false);
     }
+    // try {
+    //   // In production, replace with actual API call
+    //   await new Promise(resolve => setTimeout(resolve, 1500)); // Simulate API call
+      
+    //   // Mock data for demonstration
+    //   setAnalysisData({
+    //     profile: {
+    //       status: 'Active Trader',
+    //       riskLevel: 'Low',
+    //       activityLevel: 'Medium',
+    //       mainActivity: 'DeFi Trading',
+    //       lastActive: '2 hours ago',
+    //       totalValue: '$25,000'
+    //     },
+    //     portfolio: {
+    //       eth: 60,
+    //       usdc: 40
+    //     },
+    //     recentTransactions: [
+    //       { type: 'Added Liquidity', protocol: 'Uniswap', value: '$5,000' },
+    //       { type: 'Borrowed', protocol: 'Aave', value: '$3,000' },
+    //       { type: 'Swap', protocol: 'Uniswap', value: '$2,000' }
+    //     ],
+    //     activityData: [
+    //       { month: 'Jan', transactions: 45 },
+    //       { month: 'Feb', transactions: 52 },
+    //       { month: 'Mar', transactions: 38 },
+    //       { month: 'Apr', transactions: 41 },
+    //       { month: 'May', transactions: 35 }
+    //     ]
+    //   });
+    // } catch (err) {
+    //   setError('Failed to fetch wallet analysis. Please try again.');
+    // } finally {
+    //   setLoading(false);
+    // }
   };
 
   const WalletProfile = ({ profile }) => (
