@@ -33,12 +33,17 @@ class ActivityPoint(BaseModel):
     month: str
     transactions: int
 
-class Profitability(BaseModel):  # Add new model
+class Profitability(BaseModel): 
     status: str
     total_profit_loss: float
     profit_loss_percentage: float
     successful_trades: int
     total_trades: int
+
+class TechnicalMetrics(BaseModel): 
+    avg_gas_used: float
+    total_transactions: int
+    transaction_frequency: str
 
 class WalletProfile(BaseModel):
     address: str
@@ -53,6 +58,7 @@ class WalletProfile(BaseModel):
     recent_transactions: List[Transaction]
     activity_history: List[ActivityPoint]
     profitability: Profitability
+    technical_metrics: TechnicalMetrics
 
 app = FastAPI(title="Wallet Analysis API")
 
@@ -69,10 +75,9 @@ app.add_middleware(
 async def read_root():
     return {"status": "online", "service": "Wallet Analysis API"}
 
-@app.get("/analyze/{address}", response_model=WalletProfile)
+@app.get("/analyze/{address}")  # Remove response_model for now to debug
 async def analyze_wallet(address: str):
     try:
-        # Initialize provider with environment variables
         cache_config = CacheConfig(
             redis_url=os.getenv('REDIS_URL', 'redis://localhost:6379/0')
         )
@@ -83,53 +88,35 @@ async def analyze_wallet(address: str):
             cache_config=cache_config
         )
         
-        # Use async context manager to properly handle resources
         async with provider as p:
             analyzer = EnhancedWalletAnalyzer(data_provider=p, address=address)
             analysis = await analyzer.analyze()
 
-            profitability_data = analysis['profitability_metrics']
-            
-            return WalletProfile(
-                address=address,
-                profile_type=analysis['behavioral_patterns'].get('profile_type', 'Unknown'),
-                risk_level=analysis['risk_assessment'].get('overall_risk', 'Medium'),
-                activity_level=analysis['behavioral_patterns'].get('activity_level', 'Medium'),
-                main_activity=analysis['behavioral_patterns'].get('main_activity', 'Trading'),
-                last_active=analysis['behavioral_patterns'].get('last_active', 'Unknown'),
-                first_active=analysis['behavioral_patterns'].get('first_active', 'Unknown'),
-                total_value_usd=analysis['portfolio_metrics'].get('total_value_usd', 0.0),
-                portfolio=Portfolio(
-                    eth_percentage=analysis['portfolio_metrics'].get('eth_percentage', 0),
-                    usdc_percentage=analysis['portfolio_metrics'].get('usdc_percentage', 0)
-                ),
-                recent_transactions=[
-                    Transaction(
-                        type=tx['type'],
-                        protocol=tx['protocol'],
-                        value_usd=tx['value_usd']
-                    )
-                    for tx in analysis.get('recent_transactions', [])[:3]
-                ],
-                activity_history=[
-                    ActivityPoint(
-                        month=point['month'],
-                        transactions=point['count']
-                    )
-                    for point in analysis['behavioral_patterns'].get('activity_history', [])
-                ],
-                profitability=Profitability(
-                    status=profitability_data['status'],
-                    total_profit_loss=profitability_data['total_profit_loss'],
-                    profit_loss_percentage=profitability_data['profit_loss_percentage'],
-                    successful_trades=profitability_data['successful_trades'],
-                    total_trades=profitability_data['total_trades']
-                )
-            )
+            # Return the analysis directly
+            return {
+                "activity_history": analysis['activity_history'],
+                "profile_type": analysis['profile_type'],
+                "risk_level": analysis['risk_level'],
+                "activity_level": analysis['activity_level'],
+                "main_activity": analysis['main_activity'],
+                "last_active": analysis['last_active'],
+                "first_active": analysis['first_active'],
+                "total_value_usd": analysis['total_value_usd'],
+                "portfolio": {
+                    "eth_percentage": analysis['portfolio_metrics']['eth_percentage'],
+                    "usdc_percentage": analysis['portfolio_metrics']['usdc_percentage'],
+                    "tokens": analysis['portfolio_metrics']['tokens']
+                },
+                "recent_transactions": analysis.get('recent_transactions', []),
+                "activity_history": analysis['activity_history'],
+                "technical_metrics": analysis['technical_metrics'],
+                "behavioral_patterns": analysis['behavioral_patterns']
+            }
             
     except BlockchainDataError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
+        logger.error(f"Analysis failed: {e}", exc_info=True)  # Add exc_info for better debugging
         raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
 
 if __name__ == "__main__":

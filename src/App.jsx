@@ -5,7 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
-import { Activity, Wallet, AlertTriangle, TrendingUp, Clock, DollarSign} from 'lucide-react';
+import { Activity, Wallet, AlertTriangle, TrendingUp, Clock, DollarSign, ArrowLeftRight} from 'lucide-react';
 
 const WalletAnalysisDashboard = () => {
   const [address, setAddress] = useState('');
@@ -29,7 +29,8 @@ const WalletAnalysisDashboard = () => {
     try {
       const response = await fetch(`http://localhost:8000/analyze/${address}`);
       if (!response.ok) {
-        throw new Error('Failed to fetch wallet data');
+        const errorData = await response.json();
+        throw new Error(errorData.detail || 'Failed to fetch wallet data');
       }
       
       const data = await response.json();
@@ -41,31 +42,20 @@ const WalletAnalysisDashboard = () => {
           mainActivity: data.main_activity,
           lastActive: data.last_active,
           firstActive: data.first_active,
-          totalValue: `${data.total_value_usd.toLocaleString()}`,
-          profitability: {
-            status: data.profitability?.status || 'Unknown',
-            total_profit_loss: data.profitability?.total_profit_loss || 0,
-            profit_loss_percentage: data.profitability?.profit_loss_percentage || 0,
-            successful_trades: data.profitability?.successful_trades || 0,
-            total_trades: data.profitability?.total_trades || 0
-          }
+          totalValue: `${data.total_value_usd.toLocaleString()}`
         },
         portfolio: {
           eth: data.portfolio.eth_percentage,
           usdc: data.portfolio.usdc_percentage,
-          tokens: data.portfolio_metrics?.tokens || {}
+          tokens: data.portfolio.tokens || {}
         },
-        recentTransactions: data.recent_transactions.map(tx => ({
-          type: tx.type,
-          protocol: tx.protocol,
-          value: `$${tx.value_usd.toLocaleString()}`
-        })),
-        activityData: data.activity_history,
         technicalMetrics: {
-          avgGasUsed: data.technical_metrics?.avg_gas_used,
-          totalTransactions: data.technical_metrics?.total_transactions,
-          txFrequency: data.behavioral_patterns?.transaction_frequency
+          avgGasUsed: data.technical_metrics.avg_gas_used,
+          totalTransactions: data.technical_metrics.total_transactions,
+          txFrequency: data.technical_metrics.transaction_frequency
         },
+        recentTransactions: data.recent_transactions || [],
+        activityData: data.activity_history || [],
         executiveSummary: data.executive_summary
       });
     } catch (err) {
@@ -73,9 +63,9 @@ const WalletAnalysisDashboard = () => {
     } finally {
       setLoading(false);
     }
-  };
+};
 
-  const WalletProfile = ({ profile }) => (
+  const WalletProfile = ({ profile, metrics }) => (
     <Card className="col-span-2">
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
@@ -127,13 +117,14 @@ const WalletAnalysisDashboard = () => {
             <p className="text-2xl font-bold">{profile.status}</p>
           </div>
           <div>
-            <p className="text-sm font-medium">Risk Level</p>
+            <p className="text-sm font-medium">Transactions</p>
             <p className="text-2xl font-bold flex items-center gap-2">
-              <AlertTriangle className={`h-5 w-5 ${
+              {/* <AlertTriangle className={`h-5 w-5 ${
                 profile.riskLevel === 'High' ? 'text-red-500' : 
                 profile.riskLevel === 'Medium' ? 'text-yellow-500' : 'text-green-500'
-              }`} />
-              {profile.riskLevel}
+              }`} /> */}
+              <ArrowLeftRight className="h-5 w-5" />
+              {metrics.totalTransactions.toLocaleString()}
             </p>
           </div>
           <div>
@@ -171,28 +162,32 @@ const WalletAnalysisDashboard = () => {
 
   const TechnicalMetrics = ({ metrics }) => (
     <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <TrendingUp className="h-6 w-6" />
-          Technical Metrics
-        </CardTitle>
-      </CardHeader>
-      <CardContent>
-        <div className="space-y-4">
-          <div>
-            <p className="text-sm font-medium">Average Gas Used</p>
-            <p className="text-2xl font-bold">{metrics.avgGasUsed?.toFixed(0) || 'N/A'}</p>
-          </div>
-          <div>
-            <p className="text-sm font-medium">Total Transactions</p>
-            <p className="text-2xl font-bold">{metrics.totalTransactions || 0}</p>
-          </div>
-          <div>
-            <p className="text-sm font-medium">Transaction Frequency</p>
-            <p className="text-2xl font-bold">{metrics.txFrequency || 'Low'}</p>
-          </div>
-        </div>
-      </CardContent>
+        <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+                <TrendingUp className="h-6 w-6" />
+                Technical Metrics
+            </CardTitle>
+        </CardHeader>
+        <CardContent>
+            <div className="space-y-4">
+                <div>
+                    <p className="text-sm font-medium">Average Gas Used</p>
+                    <p className="text-2xl font-bold">
+                        {metrics.avgGasUsed ? metrics.avgGasUsed.toLocaleString() : 'N/A'}
+                    </p>
+                </div>
+                <div>
+                    <p className="text-sm font-medium">Total Transactions</p>
+                    <p className="text-2xl font-bold">
+                        {metrics.totalTransactions.toLocaleString()}
+                    </p>
+                </div>
+                <div>
+                    <p className="text-sm font-medium">Transaction Frequency</p>
+                    <p className="text-2xl font-bold">{metrics.txFrequency}</p>
+                </div>
+            </div>
+        </CardContent>
     </Card>
   );
 
@@ -245,21 +240,25 @@ const WalletAnalysisDashboard = () => {
 
   const ActivityChart = ({ data }) => (
     <Card>
-      <CardHeader>
-        <CardTitle>Activity Overview</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <div className="h-64">
-          <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={data}>
-              <XAxis dataKey="month" />
-              <YAxis />
-              <Tooltip />
-              <Line type="monotone" dataKey="transactions" stroke="#2563eb" />
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
-      </CardContent>
+        <CardHeader>
+            <CardTitle>Activity Overview</CardTitle>
+        </CardHeader>
+        <CardContent>
+            <div className="h-64">
+                <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={data}>
+                        <XAxis dataKey="month" />
+                        <YAxis />
+                        <Tooltip />
+                        <Line 
+                            type="monotone" 
+                            dataKey="count"
+                            stroke="#2563eb" 
+                        />
+                    </LineChart>
+                </ResponsiveContainer>
+            </div>
+        </CardContent>
     </Card>
   );
 
@@ -299,7 +298,7 @@ const WalletAnalysisDashboard = () => {
         {analysisData && (
           <>
             <div className="grid grid-cols-3 gap-6 mb-6">
-              <WalletProfile profile={analysisData.profile} />
+              <WalletProfile profile={analysisData.profile} metrics={analysisData.technicalMetrics}/>
               <TechnicalMetrics metrics={analysisData.technicalMetrics} />
             </div>
             

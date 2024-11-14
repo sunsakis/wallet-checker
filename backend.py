@@ -358,22 +358,28 @@ class EnhancedWalletAnalyzer:
             if not tx_df.empty:
                 tx_df['timestamp'] = pd.to_datetime(tx_df['timestamp'])
 
+            # Get technical metrics
+            tech_metrics = self._calculate_technical_metrics(tx_df)
+            behavior = self._analyze_behavior(tx_df)
+
             # Perform analysis
-            analysis = {
-                'executive_summary': self._generate_executive_summary(
-                    tx_df,
-                    balances
-                ),
-                'risk_assessment': self._assess_risks(tx_df),
-                'executive_summary': self._generate_executive_summary(tx_df, balances),
-                'profitability_metrics': self._assess_profitability(tx_df),
-                'behavioral_patterns': self._analyze_behavior(tx_df),
+            return {
+                'profile_type': behavior['profile_type'],
+                'risk_level': 'Low',  # You might want to calculate this
+                'activity_level': behavior['activity_level'],
+                'main_activity': behavior['main_activity'],
+                'last_active': behavior['last_active'],
+                'first_active': behavior['first_active'],
+                'total_value_usd': (await self._analyze_portfolio(balances))['total_value_usd'],
                 'portfolio_metrics': await self._analyze_portfolio(balances),
-                'technical_metrics': self._calculate_technical_metrics(tx_df)
+                'activity_history': behavior['activity_history'],
+                'technical_metrics': tech_metrics,  # Make sure this is included
+                'profitability_metrics': self._assess_profitability(tx_df),
+                'behavioral_patterns': {
+                    'transaction_frequency': tech_metrics['transaction_frequency']
+                }
             }
-            
-            return analysis
-            
+                
         except BlockchainDataError as e:
             logger.error(f"Blockchain data error: {e}")
             raise
@@ -424,6 +430,17 @@ class EnhancedWalletAnalyzer:
         # Convert timestamp strings to datetime objects if needed
         if isinstance(tx_df['timestamp'].iloc[0], str):
             tx_df['timestamp'] = pd.to_datetime(tx_df['timestamp'])
+        
+        # Calculate monthly activity
+        tx_df['month'] = tx_df['timestamp'].dt.strftime('%b')
+        monthly_counts = tx_df.groupby('month').size().reset_index()
+        activity_history = [
+            {
+                "month": row['month'],
+                "count": int(row[0])  # Change back to 'count'
+            }
+            for _, row in monthly_counts.iterrows()
+        ]
         
         # Get last active time and calculate time difference
         last_tx_time = tx_df['timestamp'].max()
@@ -493,21 +510,22 @@ class EnhancedWalletAnalyzer:
             return {
                 "avg_gas_used": 0,
                 "total_transactions": 0,
-                "recent_transactions": []
+                "transaction_frequency": "None"  # Add this field
             }
         
-        recent_txs = []
-        for _, tx in tx_df.head(3).iterrows():
-            recent_txs.append({
-                "type": "Transfer" if tx['value'] > 0 else "Contract Interaction",
-                "protocol": "Ethereum",
-                "value_usd": tx['value'] * 2000  # Simplified ETH price
-            })
-        
+        # Calculate transaction frequency
+        tx_count = len(tx_df)
+        if tx_count > 100:
+            frequency = "High"
+        elif tx_count > 50:
+            frequency = "Medium"
+        else:
+            frequency = "Low"
+
         return {
-            "avg_gas_used": tx_df['gas_used'].mean(),
-            "total_transactions": len(tx_df),
-            "recent_transactions": recent_txs
+            "avg_gas_used": float(tx_df['gas_used'].mean()),  # Convert to float
+            "total_transactions": tx_count,
+            "transaction_frequency": frequency  # Add transaction frequency
         }
     
     def _assess_profitability(self, tx_df: pd.DataFrame) -> dict:
