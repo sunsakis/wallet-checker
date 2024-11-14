@@ -33,6 +33,13 @@ class ActivityPoint(BaseModel):
     month: str
     transactions: int
 
+class Profitability(BaseModel):  # Add new model
+    status: str
+    total_profit_loss: float
+    profit_loss_percentage: float
+    successful_trades: int
+    total_trades: int
+
 class WalletProfile(BaseModel):
     address: str
     profile_type: str
@@ -40,10 +47,12 @@ class WalletProfile(BaseModel):
     activity_level: str
     main_activity: str
     last_active: str
+    first_active: str
     total_value_usd: float
     portfolio: Portfolio
     recent_transactions: List[Transaction]
     activity_history: List[ActivityPoint]
+    profitability: Profitability
 
 app = FastAPI(title="Wallet Analysis API")
 
@@ -74,48 +83,50 @@ async def analyze_wallet(address: str):
             cache_config=cache_config
         )
         
-        # Initialize analyzer
-        analyzer = EnhancedWalletAnalyzer(
-            data_provider=provider,
-            address=address
-        )
-        
-        # Get analysis
-        analysis = await analyzer.analyze()
-        
-        # Transform the analysis data into our API response format
-        portfolio_data = analysis['portfolio_metrics']
-        behavior_data = analysis['behavioral_patterns']
-        
-        return WalletProfile(
-            address=address,
-            profile_type=behavior_data.get('profile_type', 'Unknown'),
-            risk_level=analysis['risk_assessment'].get('overall_risk', 'Medium'),
-            activity_level=behavior_data.get('activity_level', 'Medium'),
-            main_activity=behavior_data.get('main_activity', 'Trading'),
-            last_active=behavior_data.get('last_active', 'Unknown'),
-            total_value_usd=portfolio_data.get('total_value_usd', 0.0),
-            portfolio=Portfolio(
-                eth_percentage=portfolio_data.get('eth_percentage', 0),
-                usdc_percentage=portfolio_data.get('usdc_percentage', 0)
-            ),
-            recent_transactions=[
-                Transaction(
-                    type=tx['type'],
-                    protocol=tx['protocol'],
-                    value_usd=tx['value_usd']
+        # Use async context manager to properly handle resources
+        async with provider as p:
+            analyzer = EnhancedWalletAnalyzer(data_provider=p, address=address)
+            analysis = await analyzer.analyze()
+
+            profitability_data = analysis['profitability_metrics']
+            
+            return WalletProfile(
+                address=address,
+                profile_type=analysis['behavioral_patterns'].get('profile_type', 'Unknown'),
+                risk_level=analysis['risk_assessment'].get('overall_risk', 'Medium'),
+                activity_level=analysis['behavioral_patterns'].get('activity_level', 'Medium'),
+                main_activity=analysis['behavioral_patterns'].get('main_activity', 'Trading'),
+                last_active=analysis['behavioral_patterns'].get('last_active', 'Unknown'),
+                first_active=analysis['behavioral_patterns'].get('first_active', 'Unknown'),
+                total_value_usd=analysis['portfolio_metrics'].get('total_value_usd', 0.0),
+                portfolio=Portfolio(
+                    eth_percentage=analysis['portfolio_metrics'].get('eth_percentage', 0),
+                    usdc_percentage=analysis['portfolio_metrics'].get('usdc_percentage', 0)
+                ),
+                recent_transactions=[
+                    Transaction(
+                        type=tx['type'],
+                        protocol=tx['protocol'],
+                        value_usd=tx['value_usd']
+                    )
+                    for tx in analysis.get('recent_transactions', [])[:3]
+                ],
+                activity_history=[
+                    ActivityPoint(
+                        month=point['month'],
+                        transactions=point['count']
+                    )
+                    for point in analysis['behavioral_patterns'].get('activity_history', [])
+                ],
+                profitability=Profitability(
+                    status=profitability_data['status'],
+                    total_profit_loss=profitability_data['total_profit_loss'],
+                    profit_loss_percentage=profitability_data['profit_loss_percentage'],
+                    successful_trades=profitability_data['successful_trades'],
+                    total_trades=profitability_data['total_trades']
                 )
-                for tx in analysis.get('recent_transactions', [])[:3]
-            ],
-            activity_history=[
-                ActivityPoint(
-                    month=point['month'],
-                    transactions=point['count']
-                )
-                for point in behavior_data.get('activity_history', [])
-            ]
-        )
-        
+            )
+            
     except BlockchainDataError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:

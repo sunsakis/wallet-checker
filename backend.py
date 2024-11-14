@@ -64,31 +64,47 @@ class BaseCache(ABC):
         pass
 
 class RedisCache(BaseCache):
-    """Redis cache implementation"""
-    
     def __init__(self, redis_url: str):
-        self.redis = redis.from_url(redis_url)
+        self.available = False
+        try:
+            self.redis = redis.from_url(redis_url)
+            self.available = True
+        except (redis.ConnectionError, ConnectionRefusedError):
+            logger.warning("Redis unavailable - falling back to no-op cache")
     
     async def get(self, key: str) -> Optional[Any]:
+        if not self.available:
+            return None
         try:
             value = self.redis.get(key)
             return json.loads(value) if value else None
-        except Exception as e:
-            logger.error(f"Redis get error: {e}")
+        except Exception:
+            # Don't log every failed operation
             return None
     
     async def set(self, key: str, value: Any, ttl: Optional[int] = None) -> None:
+        if not self.available:
+            return
         try:
-            serialized = json.dumps(value)
+            serialized = json.dumps(value, default=self._datetime_handler)
             self.redis.set(key, serialized, ex=ttl)
-        except Exception as e:
-            logger.error(f"Redis set error: {e}")
+        except Exception:
+            # Don't log every failed operation
+            pass
     
     async def delete(self, key: str) -> None:
+        if not self.available:
+            return
         try:
             self.redis.delete(key)
         except Exception as e:
             logger.error(f"Redis delete error: {e}")
+    
+    @staticmethod
+    def _datetime_handler(obj):
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
 
 class MemoryCache(BaseCache):
     """In-memory cache implementation using TTLCache"""
@@ -106,8 +122,6 @@ class MemoryCache(BaseCache):
         self.cache.pop(key, None)
 
 class BlockchainDataProvider:
-    """Primary class for retrieving and caching blockchain data"""
-    
     def __init__(
         self,
         web3_url: str,
@@ -121,87 +135,125 @@ class BlockchainDataProvider:
             cache_config.memory_maxsize,
             cache_config.memory_ttl
         )
-        
-        # API rate limiting
-        self.rate_limit = asyncio.Semaphore(5)  # 5 concurrent requests
+        self._session = None
+        self.rate_limit = asyncio.Semaphore(5)
         self.request_timestamps: List[float] = []
         self.max_requests_per_second = 5
-    
-    @backoff.on_exception(
-        backoff.expo,
-        (NetworkError, RateLimitError),
-        max_tries=5
-    )
+
+    async def __aenter__(self):
+        await self.get_session()
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self.close()
+
+    async def get_session(self):
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession()
+        return self._session
+
+    async def close(self):
+        if self._session and not self._session.closed:
+            await self._session.close()
+            self._session = None
+
+    async def get_eth_price(self) -> float:
+        """Get current ETH price in USD from Etherscan"""
+        cache_key = "eth_price_usd"
+        
+        if cached_price := await self.memory_cache.get(cache_key):
+            return cached_price
+        
+        try:
+            async with self.rate_limit:
+                await self._check_rate_limit()
+                session = await self.get_session()
+                
+                params = {
+                    'module': 'stats',
+                    'action': 'ethprice',
+                    'apikey': self.etherscan_api_key
+                }
+                
+                async with session.get(
+                    'https://api.etherscan.io/api',
+                    params=params
+                ) as response:
+                    if response.status != 200:
+                        raise NetworkError(f"API request failed: {response.status}")
+                    
+                    data = await response.json()
+                    if data['status'] != '1':
+                        raise BlockchainDataError(f"API error: {data.get('message')}")
+                    
+                    eth_price = float(data['result']['ethusd'])
+                    await self.memory_cache.set(cache_key, eth_price, ttl=300)
+                    return eth_price
+                    
+        except Exception as e:
+            logger.error(f"Error getting ETH price: {e}")
+            raise BlockchainDataError(f"Failed to get ETH price: {e}")
+
     async def get_wallet_transactions(
         self,
         address: str,
         start_block: Optional[int] = None,
         end_block: Optional[int] = None
     ) -> List[dict]:
-        """Retrieve wallet transactions with caching and error handling"""
         cache_key = f"tx:{address}:{start_block}:{end_block}"
         
-        # Try memory cache first
         if cached_data := await self.memory_cache.get(cache_key):
-            logger.debug("Memory cache hit for transactions")
             return cached_data
-        
-        # Try Redis cache
+            
         if cached_data := await self.redis_cache.get(cache_key):
-            logger.debug("Redis cache hit for transactions")
             await self.memory_cache.set(cache_key, cached_data)
             return cached_data
-        
-        # Fetch from blockchain
+            
         try:
             async with self.rate_limit:
                 await self._check_rate_limit()
+                session = await self.get_session()
                 
-                async with aiohttp.ClientSession() as session:
-                    params = {
-                        'module': 'account',
-                        'action': 'txlist',
-                        'address': address,
-                        'apikey': self.etherscan_api_key,
-                        'sort': 'desc'
-                    }
-                    if start_block:
-                        params['startblock'] = start_block
-                    if end_block:
-                        params['endblock'] = end_block
+                params = {
+                    'module': 'account',
+                    'action': 'txlist',
+                    'address': address,
+                    'apikey': self.etherscan_api_key,
+                    'sort': 'desc'
+                }
+                if start_block:
+                    params['startblock'] = start_block
+                if end_block:
+                    params['endblock'] = end_block
+                
+                async with session.get(
+                    'https://api.etherscan.io/api',
+                    params=params
+                ) as response:
+                    if response.status != 200:
+                        raise NetworkError(f"API request failed: {response.status}")
                     
-                    async with session.get(
-                        'https://api.etherscan.io/api',
-                        params=params
-                    ) as response:
-                        if response.status != 200:
-                            raise NetworkError(
-                                f"API request failed: {response.status}"
-                            )
-                        
-                        data = await response.json()
-                        if data['status'] != '1':
-                            raise BlockchainDataError(
-                                f"API error: {data.get('message')}"
-                            )
-                        
-                        transactions = data['result']
-                        
-                        # Validate and clean data
-                        cleaned_txs = [
-                            self._clean_transaction(tx) 
-                            for tx in transactions
-                        ]
-                        
-                        # Cache the results
-                        await self.redis_cache.set(
-                            cache_key,
-                            cleaned_txs,
-                            ttl=3600
-                        )
-                        await self.memory_cache.set(cache_key, cleaned_txs)
-                        
-                        return cleaned_txs
+                    data = await response.json()
+                    if data['status'] != '1':
+                        raise BlockchainDataError(f"API error: {data.get('message')}")
+                    
+                    transactions = data['result']
+                    
+                    # Validate and clean data
+                    cleaned_txs = [
+                        self._clean_transaction(tx) 
+                        for tx in transactions
+                    ]
+                    
+                    # Cache the results
+                    await self.redis_cache.set(
+                        cache_key,
+                        cleaned_txs,
+                        ttl=3600
+                    )
+                    await self.memory_cache.set(cache_key, cleaned_txs)
+                    
+                    return cleaned_txs
                         
         except aiohttp.ClientError as e:
             raise NetworkError(f"Network request failed: {e}")
@@ -271,12 +323,10 @@ class BlockchainDataProvider:
             'to_address': tx['to'],
             'value': float(Web3.from_wei(int(tx['value']), 'ether')),
             'gas_used': int(tx['gasUsed']),
-            'timestamp': datetime.fromtimestamp(int(tx['timeStamp']))
+            'timestamp': datetime.fromtimestamp(int(tx['timeStamp'])).isoformat()  # Store as ISO string
         }
 
 class EnhancedWalletAnalyzer:
-    """Enhanced version of WalletAnalyzer with blockchain data integration"""
-    
     def __init__(
         self,
         data_provider: BlockchainDataProvider,
@@ -284,6 +334,13 @@ class EnhancedWalletAnalyzer:
     ):
         self.data_provider = data_provider
         self.address = address
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self.data_provider.close()
+
     
     async def analyze(self) -> dict:
         """Perform complete wallet analysis"""
@@ -298,7 +355,9 @@ class EnhancedWalletAnalyzer:
             
             # Convert to pandas for analysis
             tx_df = pd.DataFrame(transactions)
-            
+            if not tx_df.empty:
+                tx_df['timestamp'] = pd.to_datetime(tx_df['timestamp'])
+
             # Perform analysis
             analysis = {
                 'executive_summary': self._generate_executive_summary(
@@ -306,8 +365,10 @@ class EnhancedWalletAnalyzer:
                     balances
                 ),
                 'risk_assessment': self._assess_risks(tx_df),
+                'executive_summary': self._generate_executive_summary(tx_df, balances),
+                'profitability_metrics': self._assess_profitability(tx_df),
                 'behavioral_patterns': self._analyze_behavior(tx_df),
-                'portfolio_metrics': self._analyze_portfolio(balances),
+                'portfolio_metrics': await self._analyze_portfolio(balances),
                 'technical_metrics': self._calculate_technical_metrics(tx_df)
             }
             
@@ -317,8 +378,8 @@ class EnhancedWalletAnalyzer:
             logger.error(f"Blockchain data error: {e}")
             raise
         except Exception as e:
-            logger.error(f"Analysis error: {e}")
-            raise
+            logger.error(f"Analysis error: {str(e)}", exc_info=True)
+            raise BlockchainDataError(f"Failed to analyze wallet: {str(e)}")
     
     def _generate_executive_summary(
     self,
@@ -340,19 +401,12 @@ class EnhancedWalletAnalyzer:
     
     def _assess_risks(self, tx_df: pd.DataFrame) -> dict:
         if tx_df.empty:
-            return {"overall_risk": "Unknown"}
+            return {"overall_risk": 0}
         
         # Simple risk assessment based on transaction frequency
         tx_count = len(tx_df)
-        if tx_count > 100:
-            risk = "High"
-        elif tx_count > 50:
-            risk = "Medium"
-        else:
-            risk = "Low"
         
         return {
-            "overall_risk": risk,
             "transaction_frequency": tx_count
         }
     
@@ -363,11 +417,36 @@ class EnhancedWalletAnalyzer:
                 "activity_level": "None",
                 "main_activity": "None",
                 "last_active": "Never",
+                "first_active": "Never",
                 "activity_history": []
             }
         
-        # Get last active time
-        last_active = tx_df['timestamp'].max()
+        # Convert timestamp strings to datetime objects if needed
+        if isinstance(tx_df['timestamp'].iloc[0], str):
+            tx_df['timestamp'] = pd.to_datetime(tx_df['timestamp'])
+        
+        # Get last active time and calculate time difference
+        last_tx_time = tx_df['timestamp'].max()
+        first_tx_time = tx_df['timestamp'].min()
+        now = datetime.now()
+        
+        # Format time differences for both last and first active
+        def format_time_diff(time_diff):
+            if time_diff.total_seconds() < 24 * 3600:  # Less than 24 hours
+                hours = int(time_diff.total_seconds() / 3600)
+                return f"{hours} hour{'s' if hours != 1 else ''} ago"
+            elif time_diff.days < 30:  # Less than 30 days
+                days = time_diff.days
+                return f"{days} day{'s' if days != 1 else ''} ago"
+            elif time_diff.days < 365:  # Less than a year
+                months = int(time_diff.days / 30)
+                return f"{months} month{'s' if months != 1 else ''} ago"
+            else:
+                years = int(time_diff.days / 365)
+                return f"{years} year{'s' if years != 1 else ''} ago"
+
+        last_active = format_time_diff(now - last_tx_time)
+        first_active = format_time_diff(now - first_tx_time)
         
         # Calculate monthly activity
         tx_df['month'] = tx_df['timestamp'].dt.strftime('%b')
@@ -390,13 +469,15 @@ class EnhancedWalletAnalyzer:
             "profile_type": "Active Trader" if tx_count > 50 else "Casual User",
             "activity_level": activity_level,
             "main_activity": "Trading",
-            "last_active": last_active.isoformat(),
+            "last_active": last_active,
+            "first_active": first_active,
             "activity_history": activity_history
         }
     
-    def _analyze_portfolio(self, balances: Dict[str, float]) -> dict:
+    async def _analyze_portfolio(self, balances: Dict[str, float]) -> dict:
         eth_balance = balances.get('ETH', 0)
-        eth_value_usd = eth_balance * 2000  # Simplified ETH price
+        eth_price = await self.data_provider.get_eth_price()
+        eth_value_usd = round(eth_balance * eth_price, 2)
         
         return {
             "total_value_usd": eth_value_usd,
@@ -428,35 +509,94 @@ class EnhancedWalletAnalyzer:
             "total_transactions": len(tx_df),
             "recent_transactions": recent_txs
         }
+    
+    def _assess_profitability(self, tx_df: pd.DataFrame) -> dict:
+        if tx_df.empty:
+            return {
+                "status": "Unknown",
+                "total_profit_loss": 0,
+                "profit_loss_percentage": 0,
+                "successful_trades": 0,
+                "total_trades": 0
+            }
+        
+        try:
+            # Calculate inflows and outflows
+            tx_df['inflow'] = tx_df.apply(
+                lambda x: float(x['value']) if x['to_address'].lower() == self.address.lower() else 0,
+                axis=1
+            )
+            tx_df['outflow'] = tx_df.apply(
+                lambda x: float(x['value']) if x['from_address'].lower() == self.address.lower() else 0,
+                axis=1
+            )
+            
+            total_inflow = tx_df['inflow'].sum()
+            total_outflow = tx_df['outflow'].sum()
+            net_position = total_inflow - total_outflow
+            
+            # Calculate profit/loss percentage
+            if total_outflow > 0:
+                profit_loss_percentage = (net_position / total_outflow) * 100
+            else:
+                profit_loss_percentage = 0
+            
+            # Count successful trades (where inflow > outflow)
+            successful_trades = len(tx_df[tx_df['inflow'] > tx_df['outflow']])
+            total_trades = len(tx_df)
+            
+            # Determine profitability status
+            if profit_loss_percentage > 20:
+                status = "Highly Profitable"
+            elif profit_loss_percentage > 5:
+                status = "Profitable"
+            elif profit_loss_percentage > -5:
+                status = "Break Even"
+            elif profit_loss_percentage > -20:
+                status = "Loss Making"
+            else:
+                status = "High Loss"
+                
+            return {
+                "status": status,
+                "total_profit_loss": round(net_position, 4),
+                "profit_loss_percentage": round(profit_loss_percentage, 2),
+                "successful_trades": successful_trades,
+                "total_trades": total_trades
+            }
+            
+        except Exception as e:
+            logger.error(f"Error calculating profitability: {e}")
+            return {
+                "status": "Error",
+                "total_profit_loss": 0,
+                "profit_loss_percentage": 0,
+                "successful_trades": 0,
+                "total_trades": 0
+            }
 
-# Usage example
-async def main():
-    # Load configuration
+async def analyze_wallet(address: str) -> dict:
     cache_config = CacheConfig(
         redis_url=os.getenv('REDIS_URL', 'redis://localhost:6379/0')
     )
     
-    # Initialize provider
     provider = BlockchainDataProvider(
         web3_url=os.getenv('WEB3_URL'),
         etherscan_api_key=os.getenv('ETHERSCAN_API_KEY'),
         cache_config=cache_config
     )
     
-    # Initialize analyzer
-    analyzer = EnhancedWalletAnalyzer(
-        data_provider=provider,
-        address='0x...'  # Target wallet address
-    )
-    
+    async with provider as p:
+        analyzer = EnhancedWalletAnalyzer(p, address)
+        return await analyzer.analyze()
+
+async def main():
     try:
-        # Perform analysis
-        analysis = await analyzer.analyze()
+        address = '0x...'  # Target wallet address
+        analysis = await analyze_wallet(address)
         print(json.dumps(analysis, indent=2))
-    except BlockchainDataError as e:
-        logger.error(f"Analysis failed: {e}")
     except Exception as e:
-        logger.error(f"Unexpected error: {e}")
+        logger.error(f"Analysis failed: {e}")
 
 if __name__ == "__main__":
     asyncio.run(main())
