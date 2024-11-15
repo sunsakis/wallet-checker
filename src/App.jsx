@@ -70,19 +70,19 @@ const WalletProfile = ({ profile, metrics }) => {
         return "No holdings";
     }
 
-    // Get the token with highest balance
+    // Check if ETH exists in tokens
+    if ('ETH' in tokens) {
+        return `${tokens['ETH'].toFixed(4)} ETH`;
+    }
+
+    // If no ETH, fallback to previous logic
     const mainToken = Object.entries(tokens)
         .reduce((max, [token, amount]) => {
             return amount > max[1] ? [token, amount] : max;
         }, ['', 0]);
 
-    // Format the amount based on token type
-    const formattedAmount = mainToken[0] === 'ETH' 
-        ? mainToken[1].toFixed(4)  // 4 decimals for ETH
-        : mainToken[1].toLocaleString();  // Regular formatting for others
-
-    return `${formattedAmount} ${mainToken[0]}`;
-  };
+    return `${mainToken[1].toFixed(4)} ${mainToken[0]}`;
+};
 
     return (
       <Card className="col-span-2">
@@ -96,7 +96,7 @@ const WalletProfile = ({ profile, metrics }) => {
         <CardContent>
           <div className="grid grid-cols-3 gap-4">
             <div>
-            <p className="text-sm font-medium">Main Holding</p>
+            <p className="text-sm font-medium">Balance</p>
             <p className="text-2xl font-bold">
                 {getMainHolding()}
             </p>
