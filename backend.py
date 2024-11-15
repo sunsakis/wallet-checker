@@ -138,9 +138,6 @@ class BlockchainDataProvider:
             cache_config.memory_ttl
         )
         self._session = None
-        self.rate_limit = asyncio.Semaphore(5)
-        self.request_timestamps: List[float] = []
-        self.max_requests_per_second = 5
 
     async def __aenter__(self):
         await self.get_session()
@@ -167,30 +164,28 @@ class BlockchainDataProvider:
             return cached_price
         
         try:
-            async with self.rate_limit:
-                await self._check_rate_limit()
-                session = await self.get_session()
+            session = await self.get_session()
+            
+            params = {
+                'module': 'stats',
+                'action': 'ethprice',
+                'apikey': self.etherscan_api_key
+            }
+            
+            async with session.get(
+                'https://api.etherscan.io/api',
+                params=params
+            ) as response:
+                if response.status != 200:
+                    raise NetworkError(f"API request failed: {response.status}")
                 
-                params = {
-                    'module': 'stats',
-                    'action': 'ethprice',
-                    'apikey': self.etherscan_api_key
-                }
+                data = await response.json()
+                if data['status'] != '1':
+                    raise BlockchainDataError(f"API error: {data.get('message')}")
                 
-                async with session.get(
-                    'https://api.etherscan.io/api',
-                    params=params
-                ) as response:
-                    if response.status != 200:
-                        raise NetworkError(f"API request failed: {response.status}")
-                    
-                    data = await response.json()
-                    if data['status'] != '1':
-                        raise BlockchainDataError(f"API error: {data.get('message')}")
-                    
-                    eth_price = float(data['result']['ethusd'])
-                    await self.memory_cache.set(cache_key, eth_price, ttl=300)
-                    return eth_price
+                eth_price = float(data['result']['ethusd'])
+                await self.memory_cache.set(cache_key, eth_price, ttl=300)
+                return eth_price
                     
         except Exception as e:
             logger.error(f"Error getting ETH price: {e}")
@@ -212,50 +207,53 @@ class BlockchainDataProvider:
             return cached_data
             
         try:
-            async with self.rate_limit:
-                await self._check_rate_limit()
-                session = await self.get_session()
+            session = await self.get_session()
+            
+            params = {
+                'module': 'account',
+                'action': 'txlist',
+                'address': address,
+                'apikey': self.etherscan_api_key,
+                'sort': 'desc'
+            }
+            if start_block:
+                params['startblock'] = start_block
+            if end_block:
+                params['endblock'] = end_block
+            
+            async with session.get(
+                'https://api.etherscan.io/api',
+                params=params
+            ) as response:
+                if response.status != 200:
+                    raise NetworkError(f"API request failed: {response.status}")
                 
-                params = {
-                    'module': 'account',
-                    'action': 'txlist',
-                    'address': address,
-                    'apikey': self.etherscan_api_key,
-                    'sort': 'desc'
-                }
-                if start_block:
-                    params['startblock'] = start_block
-                if end_block:
-                    params['endblock'] = end_block
+                data = await response.json()
+                if data['status'] != '1':
+                    if data['message'] == 'No transactions found':
+                        return []
+                    raise BlockchainDataError(f"API error: {data.get('message')}")
                 
-                async with session.get(
-                    'https://api.etherscan.io/api',
-                    params=params
-                ) as response:
-                    if response.status != 200:
-                        raise NetworkError(f"API request failed: {response.status}")
-                    
-                    data = await response.json()
-                    if data['status'] != '1':
-                        raise BlockchainDataError(f"API error: {data.get('message')}")
-                    
-                    transactions = data['result']
-                    
-                    # Validate and clean data
-                    cleaned_txs = [
-                        self._clean_transaction(tx) 
-                        for tx in transactions
-                    ]
-                    
-                    # Cache the results
-                    await self.redis_cache.set(
-                        cache_key,
-                        cleaned_txs,
-                        ttl=3600
-                    )
-                    await self.memory_cache.set(cache_key, cleaned_txs)
-                    
-                    return cleaned_txs
+                transactions = data['result']
+                
+                # Clean and format transactions
+                cleaned_txs = []
+                for tx in transactions:
+                    cleaned_tx = {
+                        'hash': tx['hash'],
+                        'from_address': tx['from'],
+                        'to_address': tx['to'],
+                        'value': float(Web3.from_wei(int(tx['value']), 'ether')),
+                        'gas_used': int(tx['gasUsed']),
+                        'timestamp': datetime.fromtimestamp(int(tx['timeStamp'])).isoformat()
+                    }
+                    cleaned_txs.append(cleaned_tx)
+                
+                # Cache the results
+                await self.redis_cache.set(cache_key, cleaned_txs, ttl=3600)
+                await self.memory_cache.set(cache_key, cleaned_txs)
+                
+                return cleaned_txs
                         
         except aiohttp.ClientError as e:
             raise NetworkError(f"Network request failed: {e}")
@@ -265,11 +263,10 @@ class BlockchainDataProvider:
             logger.error(f"Unexpected error: {e}")
             raise
     
-    async def get_token_balances(self, address: str) -> Dict[str, float]:
-        """Retrieve all token balances using Etherscan API"""
+    async def get_token_balances(self, address: str) -> Dict[str, Dict]:
+        """Retrieve all token balances using Etherscan API with contract addresses"""
         cache_key = f"balances:{address}"
         
-        # Try caches first
         if cached_data := await self.memory_cache.get(cache_key):
             return cached_data
         
@@ -282,90 +279,79 @@ class BlockchainDataProvider:
             
             # Get ETH balance
             eth_balance = await self.w3.eth.get_balance(address)
-            balances['ETH'] = float(Web3.from_wei(eth_balance, 'ether'))
+            balances['ETH'] = {
+                'amount': float(Web3.from_wei(eth_balance, 'ether')),
+                'symbol': 'ETH',
+                'contract_address': None  # Native ETH has no contract
+            }
             
-            # Get ERC20 token balances from Etherscan
-            async with self.rate_limit:
-                await self._check_rate_limit()
-                session = await self.get_session()
+            # Get ERC20 token balances
+            session = await self.get_session()
+            
+            params = {
+                'module': 'account',
+                'action': 'tokentx',
+                'address': address,
+                'apikey': self.etherscan_api_key,
+                'sort': 'desc'
+            }
+            
+            async with session.get(
+                'https://api.etherscan.io/api',
+                params=params
+            ) as response:
+                if response.status != 200:
+                    raise NetworkError(f"API request failed: {response.status}")
                 
-                # First, try to get ERC-20 token transactions
-                params = {
-                    'module': 'account',
-                    'action': 'tokentx',  # Changed from tokenlist to tokentx
-                    'address': address,
-                    'apikey': self.etherscan_api_key,
-                    'sort': 'desc'
-                }
+                data = await response.json()
                 
-                async with session.get(
-                    'https://api.etherscan.io/api',
-                    params=params
-                ) as response:
-                    if response.status != 200:
-                        raise NetworkError(f"API request failed: {response.status}")
+                if data['message'] == 'OK' and data['status'] == '1':
+                    token_contracts = set()
+                    for tx in data['result']:
+                        token_contracts.add((
+                            tx['contractAddress'],
+                            tx['tokenSymbol'],
+                            int(tx['tokenDecimal'])
+                        ))
                     
-                    data = await response.json()
+                    erc20_abi = [
+                        {
+                            "constant": True,
+                            "inputs": [{"name": "_owner", "type": "address"}],
+                            "name": "balanceOf",
+                            "outputs": [{"name": "balance", "type": "uint256"}],
+                            "type": "function"
+                        }
+                    ]
                     
-                    # Handle different response scenarios
-                    if data['message'] == 'OK' and data['status'] == '1':
-                        # Create a set of unique token contracts
-                        token_contracts = set()
-                        for tx in data['result']:
-                            token_contracts.add((
-                                tx['contractAddress'],
-                                tx['tokenSymbol'],
-                                int(tx['tokenDecimal'])
-                            ))
-                        
-                        # Now get current balance for each token
-                        erc20_abi = [
-                            {
-                                "constant": True,
-                                "inputs": [{"name": "_owner", "type": "address"}],
-                                "name": "balanceOf",
-                                "outputs": [{"name": "balance", "type": "uint256"}],
-                                "type": "function"
-                            }
-                        ]
-                        
-                        for contract_addr, symbol, decimals in token_contracts:
-                            try:
-                                contract = self.w3.eth.contract(
-                                    address=Web3.to_checksum_address(contract_addr),
-                                    abi=erc20_abi
-                                )
+                    for contract_addr, symbol, decimals in token_contracts:
+                        try:
+                            contract = self.w3.eth.contract(
+                                address=Web3.to_checksum_address(contract_addr),
+                                abi=erc20_abi
+                            )
+                            
+                            balance = await contract.functions.balanceOf(
+                                Web3.to_checksum_address(address)
+                            ).call()
+                            
+                            adjusted_balance = float(balance) / (10 ** decimals)
+                            
+                            if adjusted_balance > 0:
+                                token_key = symbol
+                                if symbol in balances:
+                                    token_key = f"{symbol}-{contract_addr[:6]}"
                                 
-                                balance = await contract.functions.balanceOf(
-                                    Web3.to_checksum_address(address)
-                                ).call()
+                                balances[token_key] = {
+                                    'amount': adjusted_balance,
+                                    'symbol': symbol,
+                                    'contract_address': contract_addr,
+                                    'decimals': decimals
+                                }
                                 
-                                # Convert balance considering decimals
-                                adjusted_balance = float(balance) / (10 ** decimals)
-                                
-                                # Only add tokens with non-zero balance
-                                if adjusted_balance > 0:
-                                    # Handle duplicate symbols by appending contract address
-                                    if symbol in balances:
-                                        symbol = f"{symbol}-{contract_addr[:6]}"
-                                    balances[symbol] = adjusted_balance
-                                    
-                            except Exception as e:
-                                logger.warning(f"Error getting balance for {symbol}: {e}")
-                                continue
-                    
-                    elif data['message'] == 'No transactions found':
-                        # No ERC-20 transactions is a valid state
-                        logger.info(f"No ERC-20 transactions found for {address}")
-                        pass
-                    
-                    else:
-                        logger.warning(f"Unexpected API response: {data}")
-                        # Don't raise an exception, continue with what we have
-                        pass
-
-            # Remove tokens with zero balance
-            balances = {k: v for k, v in balances.items() if v > 0}
+                        except Exception as e:
+                            logger.warning(f"Error getting balance for {symbol}: {e}")
+                            continue
             
             # Cache results if we have any
             if balances:
@@ -377,73 +363,98 @@ class BlockchainDataProvider:
         except Exception as e:
             logger.error(f"Error getting token balances: {e}")
             raise BlockchainDataError(f"Failed to get token balances: {str(e)}")
-    
-    async def _check_rate_limit(self) -> None:
-        """Check and enforce rate limits with delay"""
-        current_time = datetime.now().timestamp()
-        self.request_timestamps = [
-            ts for ts in self.request_timestamps 
-            if current_time - ts <= 1
-        ]
         
-        if len(self.request_timestamps) >= self.max_requests_per_second:
-            await asyncio.sleep(1)  # Add 1 second delay
-            self.request_timestamps = []
-        
-        self.request_timestamps.append(current_time)
-    
-    def _clean_transaction(self, tx: dict) -> dict:
-        """Clean and validate transaction data"""
-        required_fields = {'hash', 'from', 'to', 'value', 'gasUsed'}
-        if not all(field in tx for field in required_fields):
-            raise DataValidationError(f"Missing required fields in transaction")
-        
-        return {
-            'hash': tx['hash'],
-            'from_address': tx['from'],
-            'to_address': tx['to'],
-            'value': float(Web3.from_wei(int(tx['value']), 'ether')),
-            'gas_used': int(tx['gasUsed']),
-            'timestamp': datetime.fromtimestamp(int(tx['timeStamp'])).isoformat()  # Store as ISO string
-        }
-    
-        
-    async def get_token_prices(self, tokens: List[str]) -> Dict[str, float]:
-        """Get token prices in USD using CoinGecko API"""
-        cache_key = f"token_prices:{','.join(tokens)}"
+    async def get_token_prices(self, tokens: Dict[str, Dict]) -> Dict[str, float]:
+        """Get token prices in USD using CoinGecko API with contract addresses"""
+        cache_key = f"token_prices:{','.join(sorted(tokens.keys()))}"
         
         if cached_data := await self.memory_cache.get(cache_key):
             return cached_data
-        
+            
         try:
             prices = {}
             
-            # Always get ETH price first
+            # Handle ETH separately
             if 'ETH' in tokens:
                 eth_price = await self.get_eth_price()
                 prices['ETH'] = eth_price
-                
-            # Get other token prices if any
-            non_eth_tokens = [t for t in tokens if t != 'ETH']
-            if non_eth_tokens:
+                # Set same price for ETH derivatives
+                for token_key, token_data in tokens.items():
+                    if token_data['symbol'] in ['WETH', 'stETH', 'ETHx']:
+                        prices[token_key] = eth_price
+            
+            # Get prices for other tokens using contract addresses
+            contract_tokens = {
+                k: v for k, v in tokens.items() 
+                if v.get('contract_address') and k not in prices
+            }
+            
+            if contract_tokens:
                 session = await self.get_session()
-                # ... rest of the existing code for other tokens ...
                 
-            await self.memory_cache.set(cache_key, prices, ttl=300)
+                # Get Ethereum contract addresses
+                contract_addresses = [
+                    v['contract_address'] 
+                    for v in contract_tokens.values()
+                ]
+                
+                if contract_addresses:
+                    try:
+                        headers = {}
+                        if self.coingecko_api_key:
+                            headers['x-cg-demo-api-key'] = self.coingecko_api_key
+                        
+                        # Split into chunks of 100 addresses (CoinGecko limit)
+                        chunk_size = 100
+                        for i in range(0, len(contract_addresses), chunk_size):
+                            chunk = contract_addresses[i:i + chunk_size]
+                            
+                            params = {
+                                'contract_addresses': ','.join(chunk),
+                                'vs_currencies': 'usd',
+                            }
+                            
+                            async with session.get(
+                                'https://api.coingecko.com/api/v3/simple/token_price/ethereum',
+                                params=params,
+                                headers=headers
+                            ) as response:
+                                if response.status == 200:
+                                    data = await response.json()
+                                    
+                                    # Map prices back to token symbols
+                                    for token_key, token_data in contract_tokens.items():
+                                        contract = token_data['contract_address'].lower()
+                                        if contract in data and 'usd' in data[contract]:
+                                            prices[token_key] = data[contract]['usd']
+                                        else:
+                                            prices[token_key] = 0
+                                else:
+                                    logger.warning(f"Failed to fetch prices from CoinGecko: {response.status}")
+                                    response_text = await response.text()
+                                    logger.warning(f"Response: {response_text}")
+                                    
+                    except Exception as e:
+                        logger.error(f"Error fetching CoinGecko prices: {e}")
+            
+            # Cache the results
+            if prices:
+                await self.memory_cache.set(cache_key, prices, ttl=300)
+            
             return prices
                 
         except Exception as e:
             logger.warning(f"Error fetching token prices: {e}")
-            return prices  # Return whatever prices we got
+            return prices
 
-        async def get_token_info(self, token_symbol: str) -> Optional[Dict]:
-            """Get token information from cache or Etherscan"""
-            cache_key = f"token_info:{token_symbol}"
-            
-            if cached_data := await self.memory_cache.get(cache_key):
-                return cached_data
-            
-            return None  # If not found in cache
+    async def get_token_info(self, token_symbol: str) -> Optional[Dict]:
+        """Get token information from cache or Etherscan"""
+        cache_key = f"token_info:{token_symbol}"
+        
+        if cached_data := await self.memory_cache.get(cache_key):
+            return cached_data
+        
+        return None  # If not found in cache
 
 class EnhancedWalletAnalyzer:
     def __init__(
@@ -611,23 +622,21 @@ class EnhancedWalletAnalyzer:
             "activity_history": activity_history
         }
     
-    async def _analyze_portfolio(self, balances: Dict[str, float]) -> dict:
+    async def _analyze_portfolio(self, balances: Dict[str, Dict]) -> dict:
         """Analyze portfolio composition with USD values"""
-        # Get token prices
-        token_symbols = list(balances.keys())
-        token_prices = await self.data_provider.get_token_prices(token_symbols)
+        token_prices = await self.data_provider.get_token_prices(balances)
         
-        # Calculate USD values
         portfolio_usd = {}
         total_usd = 0
         
-        for token, amount in balances.items():
-            price = token_prices.get(token, 0)
+        for token_key, token_data in balances.items():
+            price = token_prices.get(token_key, 0)
+            amount = token_data['amount']
+            
             usd_value = amount * price
-            portfolio_usd[token] = usd_value
+            portfolio_usd[token_key] = usd_value
             total_usd += usd_value
         
-        # Calculate percentages
         percentages = {
             token: (value / total_usd * 100 if total_usd > 0 else 0)
             for token, value in portfolio_usd.items()
@@ -635,7 +644,7 @@ class EnhancedWalletAnalyzer:
         
         return {
             "total_value_usd": total_usd,
-            "tokens": balances,
+            "tokens": {k: v['amount'] for k, v in balances.items()},
             "token_prices": token_prices,
             "usd_values": portfolio_usd,
             "percentages": percentages

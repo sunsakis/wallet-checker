@@ -72,16 +72,16 @@ const WalletProfile = ({ profile, metrics }) => {
 
     // Check if ETH exists in tokens
     if ('ETH' in tokens) {
-        return `${tokens['ETH'].toFixed(4)} ETH`;
+        return `${tokens['ETH'].amount.toFixed(4)} ETH`;
     }
 
     // If no ETH, fallback to previous logic
     const mainToken = Object.entries(tokens)
-        .reduce((max, [token, amount]) => {
-            return amount > max[1] ? [token, amount] : max;
-        }, ['', 0]);
+        .reduce((max, [token, data]) => {
+            return data.amount > max[1].amount ? [token, data] : max;
+        }, ['', { amount: 0 }]);
 
-    return `${mainToken[1].toFixed(4)} ${mainToken[0]}`;
+    return `${mainToken[1].amount.toFixed(4)} ${mainToken[0]}`;
 };
 
     return (
@@ -172,12 +172,12 @@ const WalletProfile = ({ profile, metrics }) => {
 
     // Transform the data
     const pieData = Object.entries(portfolio.tokens)
-        .map(([token, amount]) => {
+        .map(([token, tokenData]) => {
             const price = getTokenPrice(token);
-            const valueUSD = amount * price;
+            const valueUSD = tokenData.amount * price;
             return {
                 name: token,
-                amount: amount,
+                amount: tokenData.amount,
                 price: price,
                 value: valueUSD,
                 displayValue: valueUSD
@@ -281,27 +281,27 @@ const WalletProfile = ({ profile, metrics }) => {
 
   const PortfolioAllocation = ({ portfolio }) => (
     <Card>
-      <CardHeader>
-        <CardTitle>Portfolio Allocation</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <div className="space-y-4">
-          {Object.entries(portfolio.tokens).map(([token, amount]) => (
-            <div key={token}>
-              <div className="flex justify-between mb-1">
-                <span>{token}</span>
-                <span>{amount.toFixed(4)}</span>
-              </div>
-              <div className="w-full bg-gray-200 rounded-full h-2.5">
-                <div
-                  className="bg-blue-600 h-2.5 rounded-full"
-                  style={{ width: `${portfolio[token.toLowerCase()] || 0}%` }}
-                ></div>
-              </div>
+        <CardHeader>
+            <CardTitle>Portfolio Allocation</CardTitle>
+        </CardHeader>
+        <CardContent>
+            <div className="space-y-4">
+                {Object.entries(portfolio.tokens).map(([token, tokenData]) => (
+                    <div key={token}>
+                        <div className="flex justify-between mb-1">
+                            <span>{token}</span>
+                            <span>{tokenData.amount.toFixed(4)}</span>
+                        </div>
+                        <div className="w-full bg-gray-200 rounded-full h-2.5">
+                            <div
+                                className="bg-blue-600 h-2.5 rounded-full"
+                                style={{ width: `${portfolio.percentages[token] || 0}%` }}
+                            ></div>
+                        </div>
+                    </div>
+                ))}
             </div>
-          ))}
-        </div>
-      </CardContent>
+        </CardContent>
     </Card>
   );
 
