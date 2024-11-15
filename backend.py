@@ -364,8 +364,8 @@ class EnhancedWalletAnalyzer:
 
             # Perform analysis
             return {
-                'profile_type': behavior['profile_type'],
-                'risk_level': 'Low',  # You might want to calculate this
+                'profile_type': tech_metrics['user_type'],
+                'risk_level': 'Low',
                 'activity_level': behavior['activity_level'],
                 'main_activity': behavior['main_activity'],
                 'last_active': behavior['last_active'],
@@ -373,7 +373,7 @@ class EnhancedWalletAnalyzer:
                 'total_value_usd': (await self._analyze_portfolio(balances))['total_value_usd'],
                 'portfolio_metrics': await self._analyze_portfolio(balances),
                 'activity_history': behavior['activity_history'],
-                'technical_metrics': tech_metrics,  # Make sure this is included
+                'technical_metrics': tech_metrics, 
                 'profitability_metrics': self._assess_profitability(tx_df),
                 'behavioral_patterns': {
                     'transaction_frequency': tech_metrics['transaction_frequency']
@@ -505,28 +505,83 @@ class EnhancedWalletAnalyzer:
             }
         }
     
+
     def _calculate_technical_metrics(self, tx_df: pd.DataFrame) -> dict:
         if tx_df.empty:
             return {
                 "avg_gas_used": 0,
                 "total_transactions": 0,
-                "transaction_frequency": "None"  # Add this field
+                "transaction_frequency": "None",
+                "user_type": "Inactive - No transactions found"
             }
         
-        # Calculate transaction frequency
+        # Calculate metrics
+        avg_gas = float(tx_df['gas_used'].mean())
+        gas_std = float(tx_df['gas_used'].std())
         tx_count = len(tx_df)
-        if tx_count > 100:
-            frequency = "High"
-        elif tx_count > 50:
-            frequency = "Medium"
-        else:
-            frequency = "Low"
+        
+        # Determine user type based on combined patterns
+        user_type = self._determine_user_type(
+            avg_gas=avg_gas,
+            gas_std=gas_std,
+            tx_count=tx_count
+        )
 
         return {
-            "avg_gas_used": float(tx_df['gas_used'].mean()),  # Convert to float
+            "avg_gas_used": avg_gas,
             "total_transactions": tx_count,
-            "transaction_frequency": frequency  # Add transaction frequency
+            "transaction_frequency": self._calculate_frequency(tx_count),
+            "user_type": user_type
         }
+
+    def _determine_user_type(self, avg_gas: float, gas_std: float, tx_count: int) -> str:
+        # Handle very low transaction counts separately to avoid misclassification
+        if tx_count < 5:
+            return "New User - Too few transactions for classification"
+        
+        # Define thresholds
+        LOW_GAS = 50000
+        MED_GAS = 150000
+        HIGH_GAS = 300000
+        
+        # Calculate consistency score (lower means more consistent)
+        gas_consistency = gas_std / avg_gas if avg_gas > 0 else 0
+        
+        # Classification logic
+        if tx_count > 100:  # Very active users
+            if avg_gas > HIGH_GAS and gas_consistency > 1.5:
+                return "Bot"
+            elif avg_gas > MED_GAS:
+                return "Trader"
+            else:
+                return "Trader"
+                
+        elif tx_count > 30:  # Moderately active users
+            if avg_gas < LOW_GAS and gas_consistency < 0.5:
+                return "Hodler"
+            elif LOW_GAS <= avg_gas <= MED_GAS:
+                return "Trader"
+            else:
+                return "Trader"
+                
+        else:  # Low activity users
+            if avg_gas < LOW_GAS:
+                return "Investor"
+            elif avg_gas > HIGH_GAS:
+                return "Opportunist"
+            else:
+                return "Casual"
+
+    def _calculate_frequency(self, tx_count: int) -> str:
+        if tx_count > 100:
+            return "Very High"
+        elif tx_count > 50:
+            return "High"
+        elif tx_count > 20:
+            return "Medium"
+        elif tx_count > 5:
+            return "Low"
+        return "Very Low"
     
     def _assess_profitability(self, tx_df: pd.DataFrame) -> dict:
         if tx_df.empty:

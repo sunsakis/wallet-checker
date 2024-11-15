@@ -5,7 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
-import { Activity, Wallet, AlertTriangle, TrendingUp, Clock, DollarSign, ArrowLeftRight} from 'lucide-react';
+import { Activity, Wallet, Flame, TrendingUp, Clock, DollarSign, ArrowLeftRight} from 'lucide-react';
 
 const WalletAnalysisDashboard = () => {
   const [address, setAddress] = useState('');
@@ -42,13 +42,10 @@ const WalletAnalysisDashboard = () => {
           mainActivity: data.main_activity,
           lastActive: data.last_active,
           firstActive: data.first_active,
-          totalValue: `${data.total_value_usd.toLocaleString()}`
+          totalValue: `${data.total_value_usd.toLocaleString()}`,
+          portfolio_metrics: data.portfolio  // Add this line to include portfolio data
         },
-        portfolio: {
-          eth: data.portfolio.eth_percentage,
-          usdc: data.portfolio.usdc_percentage,
-          tokens: data.portfolio.tokens || {}
-        },
+        portfolio: data.portfolio,  // This is the correct portfolio data
         technicalMetrics: {
           avgGasUsed: data.technical_metrics.avg_gas_used,
           totalTransactions: data.technical_metrics.total_transactions,
@@ -65,100 +62,88 @@ const WalletAnalysisDashboard = () => {
     }
 };
 
-  const WalletProfile = ({ profile, metrics }) => (
-    <Card className="col-span-2">
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <Wallet className="h-6 w-6" />
-          Wallet Profile
-        </CardTitle>
-        <CardDescription>Overview and key metrics</CardDescription>
-      </CardHeader>
-      <CardContent>
-      {/* <div>
-        <p className="text-sm font-medium">Profitability</p>
-        <p className="text-2xl font-bold flex items-center gap-2">
-          <TrendingUp className={`h-5 w-5 ${
-            profile.profitability?.status === 'Highly Profitable' ? 'text-green-500' : 
-            profile.profitability?.status === 'Profitable' ? 'text-green-400' :
-            profile.profitability?.status === 'Break Even' ? 'text-yellow-500' :
-            profile.profitability?.status === 'Loss Making' ? 'text-red-400' : 'text-red-500'
-          }`} />
-          {profile.profitability?.status || 'Unknown'}
-        </p>
-        <div className="mt-2 space-y-2">
-          <div className="flex justify-between text-sm">
-            <span>Total P/L:</span>
-            <span className={profile.profitability?.total_profit_loss >= 0 ? 'text-green-500' : 'text-red-500'}>
-              {profile.profitability?.total_profit_loss >= 0 ? '+' : ''}
-              {profile.profitability?.total_profit_loss?.toFixed(4) || 0} ETH
-            </span>
-          </div>
-          <div className="flex justify-between text-sm">
-            <span>P/L %:</span>
-            <span className={profile.profitability?.profit_loss_percentage >= 0 ? 'text-green-500' : 'text-red-500'}>
-              {profile.profitability?.profit_loss_percentage >= 0 ? '+' : ''}
-              {profile.profitability?.profit_loss_percentage?.toFixed(2) || 0}%
-            </span>
-          </div>
-          <div className="flex justify-between text-sm">
-            <span>Success Rate:</span>
-            <span>
-              {profile.profitability?.successful_trades && profile.profitability?.total_trades
-                ? ((profile.profitability.successful_trades / profile.profitability.total_trades) * 100).toFixed(1)
-                : '0'}%
-            </span>
-          </div>
-        </div>
-        </div> */}
-        <div className="grid grid-cols-3 gap-4">
-          <div>
-            <p className="text-sm font-medium">Status</p>
-            <p className="text-2xl font-bold">{profile.status}</p>
-          </div>
-          <div>
-            <p className="text-sm font-medium">Transactions</p>
-            <p className="text-2xl font-bold flex items-center gap-2">
-              {/* <AlertTriangle className={`h-5 w-5 ${
-                profile.riskLevel === 'High' ? 'text-red-500' : 
-                profile.riskLevel === 'Medium' ? 'text-yellow-500' : 'text-green-500'
-              }`} /> */}
-              <ArrowLeftRight className="h-5 w-5" />
-              {metrics.totalTransactions.toLocaleString()}
+const WalletProfile = ({ profile, metrics }) => {
+  // Function to determine main holding from portfolio metrics
+  const getMainHolding = () => {
+    const tokens = profile.portfolio_metrics?.tokens;
+    if (!tokens || Object.keys(tokens).length === 0) {
+        return "No holdings";
+    }
+
+    // Get the token with highest balance
+    const mainToken = Object.entries(tokens)
+        .reduce((max, [token, amount]) => {
+            return amount > max[1] ? [token, amount] : max;
+        }, ['', 0]);
+
+    // Format the amount based on token type
+    const formattedAmount = mainToken[0] === 'ETH' 
+        ? mainToken[1].toFixed(4)  // 4 decimals for ETH
+        : mainToken[1].toLocaleString();  // Regular formatting for others
+
+    return `${formattedAmount} ${mainToken[0]}`;
+  };
+
+    return (
+      <Card className="col-span-2">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Wallet className="h-6 w-6" />
+            Wallet Profile
+          </CardTitle>
+          <CardDescription>Overview and key metrics</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-3 gap-4">
+            <div>
+            <p className="text-sm font-medium">Main Holding</p>
+            <p className="text-2xl font-bold">
+                {getMainHolding()}
             </p>
+            </div>
+            <div>
+              <p className="text-sm font-medium">Transactions</p>
+              <p className="text-2xl font-bold flex items-center gap-2">
+                  <ArrowLeftRight className="h-5 w-5" />
+                  {metrics.totalTransactions >= 9000 
+                      ? ">9k"
+                      : metrics.totalTransactions.toLocaleString()
+                  }
+              </p>
+            </div>
+            <div>
+              <p className="text-sm font-medium">Average Gas Paid</p>
+              <p className="text-xl font-bold flex items-center gap-2">
+                  <Flame className="h-5 w-5" />
+                  {Math.round(metrics.avgGasUsed).toLocaleString()}
+              </p>
+            </div>
+            <div>
+              <p className="text-sm font-medium">First Transaction</p>
+              <p className="text-xl font-bold flex items-center gap-2">
+                <Activity className="h-5 w-5" />
+                {profile.firstActive}
+              </p>
+            </div>
+            <div>
+              <p className="text-sm font-medium">Last Active</p>
+              <p className="text-xl font-bold flex items-center gap-2">
+                <Clock className="h-5 w-5" />
+                {profile.lastActive}
+              </p>
+            </div>
+            <div>
+              <p className="text-sm font-medium">Total Value</p>
+              <p className="text-2xl font-bold flex items-center gap-2">
+                <DollarSign className="h-5 w-5" />
+                {profile.totalValue}
+              </p>
+            </div>
           </div>
-          <div>
-            <p className="text-sm font-medium">Activity Level</p>
-            <p className="text-2xl font-bold flex items-center gap-2">
-              <Activity className="h-5 w-5" />
-              {profile.activityLevel}
-            </p>
-          </div>
-          <div>
-            <p className="text-sm font-medium">First Transaction</p>
-            <p className="text-xl font-bold flex items-center gap-2">
-              <Activity className="h-5 w-5" />
-              {profile.firstActive}
-            </p>
-          </div>
-          <div>
-            <p className="text-sm font-medium">Last Active</p>
-            <p className="text-xl font-bold flex items-center gap-2">
-              <Clock className="h-5 w-5" />
-              {profile.lastActive}
-            </p>
-          </div>
-          <div>
-            <p className="text-sm font-medium">Total Value</p>
-            <p className="text-2xl font-bold flex items-center gap-2">
-              <DollarSign className="h-5 w-5" />
-              {profile.totalValue}
-            </p>
-          </div>
-        </div>
-      </CardContent>
-    </Card>
-  );
+        </CardContent>
+      </Card>
+    );
+  };
 
   const TechnicalMetrics = ({ metrics }) => (
     <Card>
