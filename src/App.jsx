@@ -4,7 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import { Activity, Wallet, Flame, TrendingUp, Clock, DollarSign, ArrowLeftRight} from 'lucide-react';
 
 const WalletAnalysisDashboard = () => {
@@ -145,36 +145,126 @@ const WalletProfile = ({ profile, metrics }) => {
     );
   };
 
-  const TechnicalMetrics = ({ metrics }) => (
-    <Card>
-        <CardHeader>
+  const Portfolio = ({ portfolio }) => {
+    // Early return if no portfolio data
+    if (!portfolio?.tokens || Object.keys(portfolio.tokens).length === 0) {
+      return (
+        <Card>
+          <CardHeader>
             <CardTitle className="flex items-center gap-2">
-                <TrendingUp className="h-6 w-6" />
-                Technical Metrics
+              <Wallet className="h-6 w-6" />
+              Token Portfolio
             </CardTitle>
+            <CardDescription>No tokens found in this wallet</CardDescription>
+          </CardHeader>
+        </Card>
+      );
+    }
+  
+    // Transform the data
+    const pieData = Object.entries(portfolio.tokens)
+      .filter(([token, amount]) => amount > 0)
+      .map(([token, amount]) => {
+        const price = portfolio.prices[token] || 0;
+        const valueUSD = amount * price;
+        return {
+          name: token,
+          value: valueUSD, // Use USD value for pie chart segments
+          amount: amount,  // Keep original amount for display
+          displayValue: valueUSD // For tooltip display
+        };
+      })
+      .sort((a, b) => b.value - a.value);
+  
+    // Calculate total USD value
+    const totalUSD = pieData.reduce((sum, item) => sum + item.value, 0);
+  
+    // Colors for different tokens
+    const COLORS = ['#627EEA', '#2775CA', '#26A17B', '#F5AC37', '#EC4899'];
+  
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Wallet className="h-6 w-6" />
+            Token Portfolio
+          </CardTitle>
+          <CardDescription className="flex justify-between">
+            <span>Current Holdings Distribution</span>
+            <span className="font-medium">
+              Total: ${totalUSD.toLocaleString(undefined, {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2
+              })}
+            </span>
+          </CardDescription>
         </CardHeader>
         <CardContent>
-            <div className="space-y-4">
-                <div>
-                    <p className="text-sm font-medium">Average Gas Used</p>
-                    <p className="text-2xl font-bold">
-                        {metrics.avgGasUsed ? metrics.avgGasUsed.toLocaleString() : 'N/A'}
-                    </p>
+          <div className="h-[300px]"> {/* Increased height for better visibility */}
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie
+                  data={pieData}
+                  dataKey="value"
+                  nameKey="name"
+                  cx="50%"
+                  cy="50%"
+                  outerRadius={80}
+                  fill="#8884d8"
+                  labelLine={false}
+                  label={({ name, percent }) => 
+                    `${name} ${(percent * 100).toFixed(1)}%`
+                  }
+                >
+                  {pieData.map((entry, index) => (
+                    <Cell 
+                      key={`cell-${index}`}
+                      fill={COLORS[index % COLORS.length]}
+                    />
+                  ))}
+                </Pie>
+                <Tooltip
+                  formatter={(value, name, props) => [
+                    `$${value.toLocaleString(undefined, {
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 2
+                    })}`,
+                    `${name} (${props.payload.amount.toFixed(4)} tokens)`
+                  ]}
+                />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+  
+          {/* Token list below chart */}
+          <div className="mt-6 space-y-4">
+            {pieData.map((token, index) => (
+              <div key={token.name} className="flex justify-between items-center">
+                <span className="flex items-center gap-2">
+                  <div
+                    className="w-3 h-3 rounded-full"
+                    style={{ backgroundColor: COLORS[index % COLORS.length] }}
+                  />
+                  <span className="font-medium">{token.name}</span>
+                </span>
+                <div className="text-right">
+                  <div className="font-medium">
+                    ${token.value.toLocaleString(undefined, {
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 2
+                    })}
+                  </div>
+                  <div className="text-sm text-gray-500">
+                    {token.amount.toFixed(4)} tokens
+                  </div>
                 </div>
-                <div>
-                    <p className="text-sm font-medium">Total Transactions</p>
-                    <p className="text-2xl font-bold">
-                        {metrics.totalTransactions.toLocaleString()}
-                    </p>
-                </div>
-                <div>
-                    <p className="text-sm font-medium">Transaction Frequency</p>
-                    <p className="text-2xl font-bold">{metrics.txFrequency}</p>
-                </div>
-            </div>
+              </div>
+            ))}
+          </div>
         </CardContent>
-    </Card>
-  );
+      </Card>
+    );
+  };
 
   const PortfolioAllocation = ({ portfolio }) => (
     <Card>
@@ -284,7 +374,7 @@ const WalletProfile = ({ profile, metrics }) => {
           <>
             <div className="grid grid-cols-3 gap-6 mb-6">
               <WalletProfile profile={analysisData.profile} metrics={analysisData.technicalMetrics}/>
-              <TechnicalMetrics metrics={analysisData.technicalMetrics} />
+              <Portfolio portfolio={analysisData.portfolio} />
             </div>
             
             <div className="grid grid-cols-1 gap-6">

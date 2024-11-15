@@ -5,6 +5,14 @@ import uvicorn
 from typing import List, Optional
 from datetime import datetime
 import os
+import logging
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 try:
     from dotenv import load_dotenv
@@ -60,7 +68,7 @@ class WalletProfile(BaseModel):
     profitability: Profitability
     technical_metrics: TechnicalMetrics
 
-app = FastAPI(title="Wallet Analysis API")
+app = FastAPI(title="Check Crypto Wallet", version="0.1")
 
 # Configure CORS
 app.add_middleware(
@@ -75,7 +83,7 @@ app.add_middleware(
 async def read_root():
     return {"status": "online", "service": "Wallet Analysis API"}
 
-@app.get("/analyze/{address}")  # Remove response_model for now to debug
+@app.get("/analyze/{address}")
 async def analyze_wallet(address: str):
     try:
         cache_config = CacheConfig(
@@ -85,33 +93,36 @@ async def analyze_wallet(address: str):
         provider = BlockchainDataProvider(
             web3_url=os.getenv('WEB3_URL'),
             etherscan_api_key=os.getenv('ETHERSCAN_API_KEY'),
+            coingecko_api_key=os.getenv('COINGECKO_API_KEY'),
             cache_config=cache_config
         )
         
         async with provider as p:
             analyzer = EnhancedWalletAnalyzer(data_provider=p, address=address)
-            analysis = await analyzer.analyze()
-
-            # Return the analysis directly
-            return {
-                "activity_history": analysis['activity_history'],
-                "profile_type": analysis['profile_type'],
-                "risk_level": analysis['risk_level'],
-                "activity_level": analysis['activity_level'],
-                "main_activity": analysis['main_activity'],
-                "last_active": analysis['last_active'],
-                "first_active": analysis['first_active'],
-                "total_value_usd": analysis['total_value_usd'],
-                "portfolio": {
-                    "eth_percentage": analysis['portfolio_metrics']['eth_percentage'],
-                    "usdc_percentage": analysis['portfolio_metrics']['usdc_percentage'],
-                    "tokens": analysis['portfolio_metrics']['tokens']
+            raw_analysis = await analyzer.analyze()
+            
+            # Structure the response to match what the frontend expects
+            analysis = {
+                'profile_type': raw_analysis['profile_type'],
+                'risk_level': raw_analysis['risk_level'],
+                'activity_level': raw_analysis['activity_level'],
+                'main_activity': raw_analysis['main_activity'],
+                'last_active': raw_analysis['last_active'],
+                'first_active': raw_analysis['first_active'],
+                'total_value_usd': raw_analysis['total_value_usd'],
+                'portfolio': {
+                    'tokens': raw_analysis['portfolio']['tokens'],
+                    'prices': raw_analysis['portfolio']['prices'],
+                    'usd_values': raw_analysis['portfolio']['usd_values'],
+                    'percentages': raw_analysis['portfolio']['percentages']
                 },
-                "recent_transactions": analysis.get('recent_transactions', []),
-                "activity_history": analysis['activity_history'],
-                "technical_metrics": analysis['technical_metrics'],
-                "behavioral_patterns": analysis['behavioral_patterns']
+                'activity_history': raw_analysis['activity_history'],
+                'technical_metrics': raw_analysis['technical_metrics'],
+                'profitability_metrics': raw_analysis['profitability_metrics'],
+                'behavioral_patterns': raw_analysis['behavioral_patterns']
             }
+            
+            return analysis
             
     except BlockchainDataError as e:
         raise HTTPException(status_code=400, detail=str(e))
