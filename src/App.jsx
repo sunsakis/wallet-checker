@@ -27,7 +27,16 @@ const WalletAnalysisDashboard = () => {
     setError('');
   
     try {
-      const response = await fetch(`http://localhost:8000/analyze/${address}`);
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/analyze/${address}`,
+        {
+          method: 'GET',
+          headers: {
+            'Accept': 'application/json',
+            'Content-Type': 'application/json',
+          },
+          mode: 'cors', // Explicitly set CORS mode
+        }
+      );
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.detail || 'Failed to fetch wallet data');
@@ -43,11 +52,12 @@ const WalletAnalysisDashboard = () => {
           lastActive: data.last_active,
           firstActive: data.first_active,
           totalValue: `${data.total_value_usd.toLocaleString()}`,
-          portfolio_metrics: data.portfolio  // Add this line to include portfolio data
+          portfolio_metrics: data.portfolio
         },
-        portfolio: data.portfolio,  // This is the correct portfolio data
+        portfolio: data.portfolio,
         technicalMetrics: {
           avgGasUsed: data.technical_metrics.avg_gas_used,
+          avg_gas_paid_usd: data.technical_metrics.avg_gas_paid_usd,
           totalTransactions: data.technical_metrics.total_transactions,
           txFrequency: data.technical_metrics.transaction_frequency
         },
@@ -85,7 +95,7 @@ const WalletProfile = ({ profile, metrics }) => {
 };
 
     return (
-      <Card className="col-span-2">
+      <Card className="col-span-full lg:col-span-2">
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Wallet className="h-6 w-6" />
@@ -94,7 +104,7 @@ const WalletProfile = ({ profile, metrics }) => {
           <CardDescription>Overview and key metrics</CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             <div>
             <p className="text-sm font-medium">Balance</p>
             <p className="text-2xl font-bold">
@@ -115,7 +125,7 @@ const WalletProfile = ({ profile, metrics }) => {
               <p className="text-sm font-medium">Average Gas Paid</p>
               <p className="text-xl font-bold flex items-center gap-2">
                   <Flame className="h-5 w-5" />
-                  {Math.round(metrics.avgGasUsed).toLocaleString()}
+                  ${metrics.avg_gas_paid_usd.toFixed(2)}
               </p>
             </div>
             <div>
@@ -136,7 +146,7 @@ const WalletProfile = ({ profile, metrics }) => {
               <p className="text-sm font-medium">Total Value</p>
               <p className="text-2xl font-bold flex items-center gap-2">
                 <DollarSign className="h-5 w-5" />
-                {profile.totalValue}
+                {Number(profile.totalValue).toFixed(2)}
               </p>
             </div>
           </div>
@@ -192,26 +202,25 @@ const WalletProfile = ({ profile, metrics }) => {
     // Colors for different tokens
     const COLORS = ['#627EEA', '#2775CA', '#26A17B', '#F5AC37', '#EC4899'];
 
-    return (
-        <Card>
-            <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                    <Wallet className="h-6 w-6" />
-                    Token Portfolio
-                </CardTitle>
-                <CardDescription className="flex justify-between">
-                    <span>Current Holdings Distribution</span>
-                    <span className="font-medium">
+              return (
+                <Card className="col-span-full lg:col-span-1">
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <Wallet className="h-6 w-6" />
+                      Token Portfolio
+                    </CardTitle>
+                    <CardDescription className="flex flex-col sm:flex-row justify-between">
+                      <span className="font-medium">
                         Total: ${totalUSD.toLocaleString(undefined, {
-                            minimumFractionDigits: 2,
-                            maximumFractionDigits: 2
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2
                         })}
-                    </span>
-                </CardDescription>
-            </CardHeader>
-            <CardContent>
-                <div className="h-[300px]">
-                    <ResponsiveContainer width="100%" height="100%">
+                      </span>
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="h-[250px] sm:h-[300px]">
+                      <ResponsiveContainer width="100%" height="100%">
                         <PieChart>
                             <Pie
                                 data={pieData}
@@ -247,7 +256,7 @@ const WalletProfile = ({ profile, metrics }) => {
                 </div>
 
                 {/* Token list below chart */}
-                <div className="mt-6 space-y-4">
+                <div className="mt-6 space-y-4 text-sm sm:text-base">
                     {pieData.map((token, index) => (
                         <div key={token.name} className="flex justify-between items-center">
                             <span className="flex items-center gap-2">
@@ -279,52 +288,52 @@ const WalletProfile = ({ profile, metrics }) => {
     );
 };
 
-  const PortfolioAllocation = ({ portfolio }) => (
-    <Card>
-        <CardHeader>
-            <CardTitle>Portfolio Allocation</CardTitle>
-        </CardHeader>
-        <CardContent>
-            <div className="space-y-4">
-                {Object.entries(portfolio.tokens).map(([token, tokenData]) => (
-                    <div key={token}>
-                        <div className="flex justify-between mb-1">
-                            <span>{token}</span>
-                            <span>{tokenData.amount.toFixed(4)}</span>
-                        </div>
-                        <div className="w-full bg-gray-200 rounded-full h-2.5">
-                            <div
-                                className="bg-blue-600 h-2.5 rounded-full"
-                                style={{ width: `${portfolio.percentages[token] || 0}%` }}
-                            ></div>
-                        </div>
-                    </div>
-                ))}
-            </div>
-        </CardContent>
-    </Card>
-  );
+  // const PortfolioAllocation = ({ portfolio }) => (
+  //   <Card>
+  //       <CardHeader>
+  //           <CardTitle>Portfolio Allocation</CardTitle>
+  //       </CardHeader>
+  //       <CardContent>
+  //           <div className="space-y-4">
+  //               {Object.entries(portfolio.tokens).map(([token, tokenData]) => (
+  //                   <div key={token}>
+  //                       <div className="flex justify-between mb-1">
+  //                           <span>{token}</span>
+  //                           <span>{tokenData.amount.toFixed(4)}</span>
+  //                       </div>
+  //                       <div className="w-full bg-gray-200 rounded-full h-2.5">
+  //                           <div
+  //                               className="bg-blue-600 h-2.5 rounded-full"
+  //                               style={{ width: `${portfolio.percentages[token] || 0}%` }}
+  //                           ></div>
+  //                       </div>
+  //                   </div>
+  //               ))}
+  //           </div>
+  //       </CardContent>
+  //   </Card>
+  // );
 
-  const RecentTransactions = ({ transactions }) => (
-    <Card>
-      <CardHeader>
-        <CardTitle>Recent Transactions</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <div className="space-y-4">
-          {transactions.map((tx, index) => (
-            <div key={index} className="flex justify-between items-center border-b pb-2">
-              <div>
-                <p className="font-medium">{tx.type}</p>
-                <p className="text-sm text-gray-500">{tx.protocol}</p>
-              </div>
-              <p className="font-medium">{tx.value}</p>
-            </div>
-          ))}
-        </div>
-      </CardContent>
-    </Card>
-  );
+  // const RecentTransactions = ({ transactions }) => (
+  //   <Card>
+  //     <CardHeader>
+  //       <CardTitle>Recent Transactions</CardTitle>
+  //     </CardHeader>
+  //     <CardContent>
+  //       <div className="space-y-4">
+  //         {transactions.map((tx, index) => (
+  //           <div key={index} className="flex justify-between items-center border-b pb-2">
+  //             <div>
+  //               <p className="font-medium">{tx.type}</p>
+  //               <p className="text-sm text-gray-500">{tx.protocol}</p>
+  //             </div>
+  //             <p className="font-medium">{tx.value}</p>
+  //           </div>
+  //         ))}
+  //       </div>
+  //     </CardContent>
+  //   </Card>
+  // );
 
   const ActivityChart = ({ data }) => (
     <Card>
@@ -351,13 +360,13 @@ const WalletProfile = ({ profile, metrics }) => {
   );
 
   return (
-    <div className="min-h-screen bg-gray-50 p-8">
+    <div className="min-h-screen bg-gray-50 p-4 sm:p-8">
       <div className="max-w-7xl mx-auto">
-        <div className="mb-8">
-          <h1 className="text-4xl font-bold mb-4">Wallet Analysis Dashboard</h1>
-          <div className="flex gap-4">
+        <div className="mb-6 sm:mb-8">
+          <h1 className="text-2xl sm:text-3xl font-bold mb-4">Check Crypto Wallet</h1>
+          <div className="flex flex-col sm:flex-row gap-4">
             <Input
-              placeholder="Enter Ethereum wallet address (0x...)"
+              placeholder="Enter Ethereum address (0x...)"
               value={address}
               onChange={(e) => setAddress(e.target.value)}
               className="flex-1"
@@ -365,6 +374,7 @@ const WalletProfile = ({ profile, metrics }) => {
             <Button 
               onClick={handleAnalyze} 
               disabled={loading}
+              className="w-full sm:w-auto"
             >
               {loading ? (
                 <span>Analyzing...</span>
@@ -385,16 +395,17 @@ const WalletProfile = ({ profile, metrics }) => {
 
         {analysisData && (
           <>
-            <div className="grid grid-cols-3 gap-6 mb-6">
+
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6 mb-6">
               <WalletProfile profile={analysisData.profile} metrics={analysisData.technicalMetrics}/>
               <Portfolio portfolio={analysisData.portfolio} />
             </div>
-            
-            <div className="grid grid-cols-1 gap-6">
+
+
+            <div className="grid grid-cols-1 gap-4 sm:gap-6 mb-6">
               <ActivityChart data={analysisData.activityData} />
-              <PortfolioAllocation portfolio={analysisData.portfolio} />
-              <RecentTransactions transactions={analysisData.recentTransactions} />
             </div>
+            
           </>
         )}
       </div>

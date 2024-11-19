@@ -14,11 +14,14 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-try:
-    from dotenv import load_dotenv
-    load_dotenv('.env.local')
-except ImportError:
-    pass
+# Only load dotenv in development
+if os.getenv('ENVIRONMENT') != 'production':
+    try:
+        from dotenv import load_dotenv
+        load_dotenv('.env.local')
+        logger.info("Loaded environment from .env files")
+    except ImportError:
+        logger.warning("python-dotenv not installed, skipping local env files")
 
 from backend import (
     BlockchainDataProvider,
@@ -73,7 +76,11 @@ app = FastAPI(title="Check Crypto Wallet", version="0.1")
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, replace with specific origins
+    allow_origins=[
+        "https://www.walletchecker.xyz",
+        "http://localhost:5173",  # Vite's default dev port
+        "http://localhost:5174"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -81,19 +88,38 @@ app.add_middleware(
 
 @app.get("/")
 async def read_root():
-    return {"status": "online", "service": "Wallet Analysis API"}
+    return {"status": "online", "service": "Crypto Wallet Analysis API"}
 
 @app.get("/analyze/{address}")
 async def analyze_wallet(address: str):
     try:
+        # Get all environment variables once
+        web3_url = os.getenv('WEB3_URL')
+        etherscan_api_key = os.getenv('ETHERSCAN_API_KEY')
+        coingecko_api_key = os.getenv('COINGECKO_API_KEY')
+        redis_url = os.getenv('REDIS_URL')
+
+        # Validate required variables
+        if not web3_url:
+            raise HTTPException(
+                status_code=500,
+                detail="WEB3_URL environment variable is not set"
+            )
+        
+        if not etherscan_api_key:
+            raise HTTPException(
+                status_code=500,
+                detail="ETHERSCAN_API_KEY environment variable is not set"
+            )
+
         cache_config = CacheConfig(
-            redis_url=os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+            redis_url=redis_url or 'redis://localhost:6379/0'
         )
         
         provider = BlockchainDataProvider(
-            web3_url=os.getenv('WEB3_URL'),
-            etherscan_api_key=os.getenv('ETHERSCAN_API_KEY'),
-            coingecko_api_key=os.getenv('COINGECKO_API_KEY'),
+            web3_url=web3_url,
+            etherscan_api_key=etherscan_api_key,
+            coingecko_api_key=coingecko_api_key,
             cache_config=cache_config
         )
         

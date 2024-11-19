@@ -190,6 +190,45 @@ class BlockchainDataProvider:
         except Exception as e:
             logger.error(f"Error getting ETH price: {e}")
             raise BlockchainDataError(f"Failed to get ETH price: {e}")
+        
+    async def get_gas_price(self) -> int:
+        """Get current gas price in wei"""
+        cache_key = "gas_price"
+        
+        if cached_price := await self.memory_cache.get(cache_key):
+            return cached_price
+            
+        try:
+            session = await self.get_session()
+            
+            params = {
+                'module': 'gastracker',
+                'action': 'gasoracle',
+                'apikey': self.etherscan_api_key
+            }
+            
+            async with session.get(
+                'https://api.etherscan.io/api',
+                params=params
+            ) as response:
+                if response.status != 200:
+                    raise NetworkError(f"API request failed: {response.status}")
+                
+                data = await response.json()
+                if data['status'] != '1':
+                    raise BlockchainDataError(f"API error: {data.get('message')}")
+                
+                # Convert Gwei to Wei (multiply by 1e9)
+                gas_price = int(float(data['result']['SafeGasPrice']) * 1e9)
+                
+                # Cache the result
+                await self.memory_cache.set(cache_key, gas_price, ttl=60)  # Cache for 1 minute
+                
+                return gas_price
+                    
+        except Exception as e:
+            logger.error(f"Error getting gas price: {e}")
+            raise BlockchainDataError(f"Failed to get gas price: {e}")
 
     async def get_wallet_transactions(
         self,
@@ -485,7 +524,7 @@ class EnhancedWalletAnalyzer:
                 tx_df['timestamp'] = pd.to_datetime(tx_df['timestamp'])
 
             # Get technical metrics
-            tech_metrics = self._calculate_technical_metrics(tx_df)
+            tech_metrics = await self._calculate_technical_metrics(tx_df)  # Added await here
             behavior = self._analyze_behavior(tx_df)
 
             # Perform analysis
@@ -499,7 +538,7 @@ class EnhancedWalletAnalyzer:
                         'total_value_usd': portfolio_analysis['total_value_usd'],
                         'portfolio': {
                             'tokens': balances,
-                            'prices': portfolio_analysis['token_prices'],  # Include token prices
+                            'prices': portfolio_analysis['token_prices'],
                             'usd_values': portfolio_analysis['usd_values'],
                             'percentages': portfolio_analysis['percentages']
                         },
@@ -651,10 +690,12 @@ class EnhancedWalletAnalyzer:
         }
     
 
-    def _calculate_technical_metrics(self, tx_df: pd.DataFrame) -> dict:
+    async def _calculate_technical_metrics(self, tx_df: pd.DataFrame) -> dict:
         if tx_df.empty:
             return {
                 "avg_gas_used": 0,
+                "avg_gas_price": 0,
+                "avg_gas_paid_usd": 0,
                 "total_transactions": 0,
                 "transaction_frequency": "None",
                 "user_type": "Inactive - No transactions found"
@@ -664,6 +705,15 @@ class EnhancedWalletAnalyzer:
         avg_gas = float(tx_df['gas_used'].mean())
         gas_std = float(tx_df['gas_used'].std())
         tx_count = len(tx_df)
+
+        # Get current gas price and ETH price
+        gas_price = await self.data_provider.get_gas_price()
+        eth_price = await self.data_provider.get_eth_price()
+        
+        # Calculate average gas paid in USD
+        # Convert wei to ETH: divide by 1e18
+        # Then multiply by ETH price to get USD value
+        avg_gas_paid_usd = (avg_gas * gas_price * eth_price) / 1e18
         
         # Determine user type based on combined patterns
         user_type = self._determine_user_type(
@@ -674,6 +724,9 @@ class EnhancedWalletAnalyzer:
 
         return {
             "avg_gas_used": avg_gas,
+            "avg_gas_price": gas_price,
+            "eth_price": eth_price,
+            "avg_gas_paid_usd": avg_gas_paid_usd,
             "total_transactions": tx_count,
             "transaction_frequency": self._calculate_frequency(tx_count),
             "user_type": user_type
