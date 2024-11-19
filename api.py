@@ -71,7 +71,7 @@ class WalletProfile(BaseModel):
     profitability: Profitability
     technical_metrics: TechnicalMetrics
 
-app = FastAPI(title="Check Crypto Wallet", version="0.1")
+app = FastAPI(title="Check Wallet", version="0.1")
 
 # Configure CORS
 app.add_middleware(

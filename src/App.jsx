@@ -363,7 +363,7 @@ const WalletProfile = ({ profile, metrics }) => {
     <div className="min-h-screen bg-gray-50 p-4 sm:p-8">
       <div className="max-w-7xl mx-auto">
         <div className="mb-6 sm:mb-8">
-          <h1 className="text-2xl sm:text-3xl font-bold mb-4">Check Crypto Wallet</h1>
+          <h1 className="text-2xl sm:text-3xl font-bold mb-4">Scan Ethereum Wallet</h1>
           <div className="flex flex-col sm:flex-row gap-4">
             <Input
               placeholder="Enter Ethereum address (0x...)"
