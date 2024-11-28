@@ -193,7 +193,8 @@ const WalletProfile = ({ profile, metrics }) => {
                 displayValue: valueUSD
             };
         })
-        .filter(token => token.value > 1) // Only include tokens worth more than $1
+        // Filter out dust amounts (worth less than $0.01)
+        .filter(token => token.value > 0.01)
         .sort((a, b) => b.value - a.value);
 
     // Calculate total USD value
@@ -202,87 +203,97 @@ const WalletProfile = ({ profile, metrics }) => {
     // Colors for different tokens
     const COLORS = ['#627EEA', '#2775CA', '#26A17B', '#F5AC37', '#EC4899'];
 
-              return (
-                <Card className="col-span-full lg:col-span-1">
-                  <CardHeader>
-                    <CardTitle className="flex items-center gap-2">
-                      <Wallet className="h-6 w-6" />
-                      Token Portfolio
-                    </CardTitle>
-                    <CardDescription className="flex flex-col sm:flex-row justify-between">
-                      <span className="font-medium">
+    return (
+        <Card className="col-span-full lg:col-span-1">
+            <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                    <Wallet className="h-6 w-6" />
+                    Token Portfolio
+                </CardTitle>
+                <CardDescription className="flex flex-col sm:flex-row justify-between">
+                    <span className="font-medium">
                         Total: ${totalUSD.toLocaleString(undefined, {
-                          minimumFractionDigits: 2,
-                          maximumFractionDigits: 2
+                            minimumFractionDigits: 2,
+                            maximumFractionDigits: 2
                         })}
-                      </span>
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="h-[250px] sm:h-[300px]">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <PieChart>
-                            <Pie
-                                data={pieData}
-                                dataKey="value"
-                                nameKey="name"
-                                cx="50%"
-                                cy="50%"
-                                outerRadius={80}
-                                fill="#8884d8"
-                                labelLine={false}
-                                label={({ name, percent }) =>
-                                    `${name} ${(percent * 100).toFixed(1)}%`
-                                }
-                            >
-                                {pieData.map((entry, index) => (
-                                    <Cell
-                                        key={`cell-${index}`}
-                                        fill={COLORS[index % COLORS.length]}
+                    </span>
+                </CardDescription>
+            </CardHeader>
+            <CardContent>
+                {pieData.length > 0 ? (
+                    <>
+                        <div className="h-[250px] sm:h-[300px]">
+                            <ResponsiveContainer width="100%" height="100%">
+                                <PieChart>
+                                    <Pie
+                                        data={pieData}
+                                        dataKey="value"
+                                        nameKey="name"
+                                        cx="50%"
+                                        cy="50%"
+                                        outerRadius={80}
+                                        fill="#8884d8"
+                                        labelLine={false}
+                                        label={({ name, percent }) =>
+                                            `${name} ${(percent * 100).toFixed(1)}%`
+                                        }
+                                    >
+                                        {pieData.map((entry, index) => (
+                                            <Cell
+                                                key={`cell-${index}`}
+                                                fill={COLORS[index % COLORS.length]}
+                                            />
+                                        ))}
+                                    </Pie>
+                                    <Tooltip
+                                        formatter={(value, name, props) => [
+                                            `$${value.toLocaleString(undefined, {
+                                                minimumFractionDigits: 2,
+                                                maximumFractionDigits: 2
+                                            })}`,
+                                            name
+                                        ]}
                                     />
-                                ))}
-                            </Pie>
-                            <Tooltip
-                                formatter={(value, name, props) => [
-                                    `$${value.toLocaleString(undefined, {
-                                        minimumFractionDigits: 2,
-                                        maximumFractionDigits: 2
-                                    })}`,
-                                    name
-                                ]}
-                            />
-                        </PieChart>
-                    </ResponsiveContainer>
-                </div>
-
-                {/* Token list below chart */}
-                <div className="mt-6 space-y-4 text-sm sm:text-base">
-                    {pieData.map((token, index) => (
-                        <div key={token.name} className="flex justify-between items-center">
-                            <span className="flex items-center gap-2">
-                                <div
-                                    className="w-3 h-3 rounded-full"
-                                    style={{ backgroundColor: COLORS[index % COLORS.length] }}
-                                />
-                                <span className="font-medium">{token.name}</span>
-                            </span>
-                            <div className="text-right">
-                                <div className="font-medium">
-                                    ${token.value.toLocaleString(undefined, {
-                                        minimumFractionDigits: 2,
-                                        maximumFractionDigits: 2
-                                    })}
-                                </div>
-                                <div className="text-sm text-gray-500">
-                                    {token.amount.toFixed(4)} × ${token.price.toLocaleString(undefined, {
-                                        minimumFractionDigits: 2,
-                                        maximumFractionDigits: 2
-                                    })}
-                                </div>
-                            </div>
+                                </PieChart>
+                            </ResponsiveContainer>
                         </div>
-                    ))}
-                </div>
+
+                        {/* Token list below chart */}
+                        <div className="mt-6 space-y-4">
+                            {pieData.map((token, index) => (
+                                <div key={token.name} className="flex justify-between items-center">
+                                    <span className="flex items-center gap-2">
+                                        <div
+                                            className="w-3 h-3 rounded-full"
+                                            style={{ backgroundColor: COLORS[index % COLORS.length] }}
+                                        />
+                                        <span className="font-medium">{token.name}</span>
+                                    </span>
+                                    <div className="text-right">
+                                        <div className="font-medium">
+                                            ${token.value.toLocaleString(undefined, {
+                                                minimumFractionDigits: 2,
+                                                maximumFractionDigits: 2
+                                            })}
+                                        </div>
+                                        <div className="text-sm text-gray-500">
+                                            {token.amount.toLocaleString(undefined, {
+                                                maximimumSignificantDigits: 6
+                                            })} × ${token.price.toLocaleString(undefined, {
+                                                minimumFractionDigits: 2,
+                                                maximumFractionDigits: 2
+                                            })}
+                                        </div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </>
+                ) : (
+                    <div className="text-center text-gray-500 py-8">
+                        No significant token holdings found
+                    </div>
+                )}
             </CardContent>
         </Card>
     );

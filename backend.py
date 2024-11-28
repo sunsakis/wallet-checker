@@ -15,6 +15,14 @@ from eth_typing import Address
 import backoff
 from cachetools import TTLCache, cached
 import os
+from dotenv import load_dotenv
+load_dotenv()
+
+# Validate required environment variables
+web3_url = os.getenv('WEB3_URL')
+etherscan_api_key = os.getenv('ETHERSCAN_API_KEY')
+if not web3_url or not etherscan_api_key:
+    raise ValueError("Missing required environment variables: WEB3_URL and ETHERSCAN_API_KEY must be set")
 
 # Configure logging
 logging.basicConfig(
@@ -306,18 +314,14 @@ class BlockchainDataProvider:
         """Retrieve all token balances using Etherscan API with contract addresses"""
         cache_key = f"balances:{address}"
         
-        if cached_data := await self.memory_cache.get(cache_key):
-            return cached_data
-        
-        if cached_data := await self.redis_cache.get(cache_key):
-            await self.memory_cache.set(cache_key, cached_data)
-            return cached_data
+        logger.info(f"Getting token balances for address: {address}")
         
         try:
-            balances = {}
-            
             # Get ETH balance
             eth_balance = await self.w3.eth.get_balance(address)
+            logger.info(f"ETH balance: {eth_balance}")
+            
+            balances = {}
             balances['ETH'] = {
                 'amount': float(Web3.from_wei(eth_balance, 'ether')),
                 'symbol': 'ETH',
@@ -335,14 +339,18 @@ class BlockchainDataProvider:
                 'sort': 'desc'
             }
             
+            logger.info("Fetching token transactions from Etherscan...")
             async with session.get(
                 'https://api.etherscan.io/api',
                 params=params
             ) as response:
                 if response.status != 200:
+                    logger.error(f"Etherscan API error: {response.status}")
                     raise NetworkError(f"API request failed: {response.status}")
                 
                 data = await response.json()
+                logger.info(f"Etherscan API response status: {data.get('status')}")
+                logger.info(f"Etherscan API message: {data.get('message')}")
                 
                 if data['message'] == 'OK' and data['status'] == '1':
                     token_contracts = set()
@@ -397,6 +405,7 @@ class BlockchainDataProvider:
                 await self.redis_cache.set(cache_key, balances, ttl=300)
                 await self.memory_cache.set(cache_key, balances)
             
+            logger.info(f"Final balances: {json.dumps(balances, indent=2)}")
             return balances
                 
         except Exception as e:
@@ -406,6 +415,7 @@ class BlockchainDataProvider:
     async def get_token_prices(self, tokens: Dict[str, Dict]) -> Dict[str, float]:
         """Get token prices in USD using CoinGecko API with contract addresses"""
         cache_key = f"token_prices:{','.join(sorted(tokens.keys()))}"
+        logger.info(f"Getting prices for tokens: {list(tokens.keys())}")
         
         if cached_data := await self.memory_cache.get(cache_key):
             return cached_data
@@ -416,6 +426,7 @@ class BlockchainDataProvider:
             # Handle ETH separately
             if 'ETH' in tokens:
                 eth_price = await self.get_eth_price()
+                logger.info(f"ETH price: ${eth_price}")
                 prices['ETH'] = eth_price
                 # Set same price for ETH derivatives
                 for token_key, token_data in tokens.items():
@@ -479,7 +490,7 @@ class BlockchainDataProvider:
             # Cache the results
             if prices:
                 await self.memory_cache.set(cache_key, prices, ttl=300)
-            
+            logger.info(f"Final prices: {json.dumps(prices, indent=2)}")
             return prices
                 
         except Exception as e:
@@ -854,6 +865,7 @@ async def analyze_wallet(address: str) -> dict:
     provider = BlockchainDataProvider(
         web3_url=os.getenv('WEB3_URL'),
         etherscan_api_key=os.getenv('ETHERSCAN_API_KEY'),
+        coingecko_api_key=os.getenv('COINGECKO_API_KEY'),
         cache_config=cache_config
     )
     
