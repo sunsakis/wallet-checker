@@ -299,32 +299,6 @@ const WalletProfile = ({ profile, metrics }) => {
     );
 };
 
-  // const PortfolioAllocation = ({ portfolio }) => (
-  //   <Card>
-  //       <CardHeader>
-  //           <CardTitle>Portfolio Allocation</CardTitle>
-  //       </CardHeader>
-  //       <CardContent>
-  //           <div className="space-y-4">
-  //               {Object.entries(portfolio.tokens).map(([token, tokenData]) => (
-  //                   <div key={token}>
-  //                       <div className="flex justify-between mb-1">
-  //                           <span>{token}</span>
-  //                           <span>{tokenData.amount.toFixed(4)}</span>
-  //                       </div>
-  //                       <div className="w-full bg-gray-200 rounded-full h-2.5">
-  //                           <div
-  //                               className="bg-blue-600 h-2.5 rounded-full"
-  //                               style={{ width: `${portfolio.percentages[token] || 0}%` }}
-  //                           ></div>
-  //                       </div>
-  //                   </div>
-  //               ))}
-  //           </div>
-  //       </CardContent>
-  //   </Card>
-  // );
-
   // const RecentTransactions = ({ transactions }) => (
   //   <Card>
   //     <CardHeader>
@@ -371,8 +345,8 @@ const WalletProfile = ({ profile, metrics }) => {
   );
 
   return (
-    <div className="min-h-screen bg-gray-50 p-4 sm:p-8">
-      <div className="max-w-7xl mx-auto">
+    <div className="min-h-screen w-full bg-gray-200">
+      <div className="container mx-auto p-4 sm:p-8">
         <div className="mb-6 sm:mb-8">
           <h1 className="text-2xl sm:text-3xl font-bold mb-4">Scan Ethereum Wallet</h1>
           <div className="flex flex-col sm:flex-row gap-4">
@@ -403,20 +377,17 @@ const WalletProfile = ({ profile, metrics }) => {
             </Alert>
           )}
         </div>
-
+  
         {analysisData && (
           <>
-
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6 mb-6">
               <WalletProfile profile={analysisData.profile} metrics={analysisData.technicalMetrics}/>
               <Portfolio portfolio={analysisData.portfolio} />
             </div>
-
-
+  
             <div className="grid grid-cols-1 gap-4 sm:gap-6 mb-6">
               <ActivityChart data={analysisData.activityData} />
             </div>
-            
           </>
         )}
       </div>
