@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+web3
+aiohttp
+redis
+python-dotenv
+pandas
+backoff
+cachetools
+pydantic
