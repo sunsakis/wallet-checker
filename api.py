@@ -95,7 +95,7 @@ async def analyze_wallet(address: str):
     try:
         # Get all environment variables once
         web3_url = os.getenv('WEB3_URL')
-        etherscan_api_key = os.getenv('ETHERSCAN_API_KEY')
+        etherscan_api_key = os.getenv('BASESCAN_API_KEY')
         coingecko_api_key = os.getenv('COINGECKO_API_KEY')
         redis_url = os.getenv('REDIS_URL')
 
@@ -109,7 +109,7 @@ async def analyze_wallet(address: str):
         if not etherscan_api_key:
             raise HTTPException(
                 status_code=500,
-                detail="ETHERSCAN_API_KEY environment variable is not set"
+                detail="BASESCAN_API_KEY environment variable is not set"
             )
 
         cache_config = CacheConfig(

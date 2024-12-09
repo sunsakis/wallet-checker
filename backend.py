@@ -20,9 +20,9 @@ load_dotenv()
 
 # Validate required environment variables
 web3_url = os.getenv('WEB3_URL')
-etherscan_api_key = os.getenv('ETHERSCAN_API_KEY')
+etherscan_api_key = os.getenv('BASESCAN_API_KEY')
 if not web3_url or not etherscan_api_key:
-    raise ValueError("Missing required environment variables: WEB3_URL and ETHERSCAN_API_KEY must be set")
+    raise ValueError("Missing required environment variables: WEB3_URL and BASESCAN_API_KEY must be set")
 
 # Configure logging
 logging.basicConfig(
@@ -181,7 +181,7 @@ class BlockchainDataProvider:
             }
             
             async with session.get(
-                'https://api.etherscan.io/api',
+                'https://api.basescan.org/api',
                 params=params
             ) as response:
                 if response.status != 200:
@@ -209,25 +209,26 @@ class BlockchainDataProvider:
         try:
             session = await self.get_session()
             
-            params = {
-                'module': 'gastracker',
-                'action': 'gasoracle',
-                'apikey': self.etherscan_api_key
+            # Use Base's JSON-RPC endpoint instead
+            payload = {
+                "jsonrpc": "2.0",
+                "method": "eth_gasPrice",
+                "params": [],
+                "id": 1
             }
             
-            async with session.get(
-                'https://api.etherscan.io/api',
-                params=params
+            async with session.post(
+                'https://mainnet.base.org',  # Base RPC endpoint
+                json=payload
             ) as response:
                 if response.status != 200:
                     raise NetworkError(f"API request failed: {response.status}")
                 
                 data = await response.json()
-                if data['status'] != '1':
-                    raise BlockchainDataError(f"API error: {data.get('message')}")
+                if 'error' in data:
+                    raise BlockchainDataError(f"RPC error: {data['error']}")
                 
-                # Convert Gwei to Wei (multiply by 1e9)
-                gas_price = int(float(data['result']['SafeGasPrice']) * 1e9)
+                gas_price = int(data['result'], 16)  # Convert hex string to int
                 
                 # Cache the result
                 await self.memory_cache.set(cache_key, gas_price, ttl=60)  # Cache for 1 minute
@@ -269,7 +270,7 @@ class BlockchainDataProvider:
                 params['endblock'] = end_block
             
             async with session.get(
-                'https://api.etherscan.io/api',
+                'https://api.basescan.org/api',
                 params=params
             ) as response:
                 if response.status != 200:
@@ -311,7 +312,7 @@ class BlockchainDataProvider:
             raise
     
     async def get_token_balances(self, address: str) -> Dict[str, Dict]:
-        """Retrieve all token balances using Etherscan API with contract addresses"""
+        """Retrieve all token balances using Blockscout API"""
         cache_key = f"balances:{address}"
         
         logger.info(f"Getting token balances for address: {address}")
@@ -328,77 +329,70 @@ class BlockchainDataProvider:
                 'contract_address': None  # Native ETH has no contract
             }
             
-            # Get ERC20 token balances
+            # Get ERC20 token balances using Blockscout API
             session = await self.get_session()
             
-            params = {
-                'module': 'account',
-                'action': 'tokentx',
-                'address': address,
-                'apikey': self.etherscan_api_key,
-                'sort': 'desc'
-            }
+            api_url = f"https://base.blockscout.com/api/v2/addresses/{address}/tokens"
             
-            logger.info("Fetching token transactions from Etherscan...")
-            async with session.get(
-                'https://api.etherscan.io/api',
-                params=params
-            ) as response:
-                if response.status != 200:
-                    logger.error(f"Etherscan API error: {response.status}")
-                    raise NetworkError(f"API request failed: {response.status}")
-                
-                data = await response.json()
-                logger.info(f"Etherscan API response status: {data.get('status')}")
-                logger.info(f"Etherscan API message: {data.get('message')}")
-                
-                if data['message'] == 'OK' and data['status'] == '1':
-                    token_contracts = set()
-                    for tx in data['result']:
-                        token_contracts.add((
-                            tx['contractAddress'],
-                            tx['tokenSymbol'],
-                            int(tx['tokenDecimal'])
-                        ))
+            async with session.get(api_url) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    logger.debug(f"Raw API response: {json.dumps(data, indent=2)}")  # Debug log the raw response
                     
-                    erc20_abi = [
-                        {
-                            "constant": True,
-                            "inputs": [{"name": "_owner", "type": "address"}],
-                            "name": "balanceOf",
-                            "outputs": [{"name": "balance", "type": "uint256"}],
-                            "type": "function"
-                        }
-                    ]
-                    
-                    for contract_addr, symbol, decimals in token_contracts:
-                        try:
-                            contract = self.w3.eth.contract(
-                                address=Web3.to_checksum_address(contract_addr),
-                                abi=erc20_abi
-                            )
-                            
-                            balance = await contract.functions.balanceOf(
-                                Web3.to_checksum_address(address)
-                            ).call()
-                            
-                            adjusted_balance = float(balance) / (10 ** decimals)
-                            
-                            if adjusted_balance > 0:
+                    if 'items' in data:
+                        for token in data['items']:
+                            try:
+                                # Check if token data exists and has required fields
+                                if not isinstance(token, dict):
+                                    continue
+                                    
+                                token_data = token.get('token', {})
+                                if not token_data:
+                                    continue
+                                    
+                                # Extract required fields with defaults
+                                symbol = token_data.get('symbol')
+                                address = token_data.get('address')
+                                decimals = token_data.get('decimals')
+                                value = token.get('value')
+                                
+                                # Skip if missing required data
+                                if not all([symbol, address, decimals, value]):
+                                    logger.debug(f"Skipping token due to missing data: {token_data}")
+                                    continue
+                                
+                                # Create token key
                                 token_key = symbol
-                                if symbol in balances:
-                                    token_key = f"{symbol}-{contract_addr[:6]}"
+                                if token_key in balances:
+                                    token_key = f"{symbol}-{address[:6]}"
                                 
-                                balances[token_key] = {
-                                    'amount': adjusted_balance,
-                                    'symbol': symbol,
-                                    'contract_address': contract_addr,
-                                    'decimals': decimals
-                                }
+                                # Convert balance
+                                try:
+                                    decimals = int(decimals)
+                                    balance = float(value) / (10 ** decimals)
+                                except (ValueError, TypeError) as e:
+                                    logger.warning(f"Error converting balance for {symbol}: {e}")
+                                    continue
                                 
-                        except Exception as e:
-                            logger.warning(f"Error getting balance for {symbol}: {e}")
-                            continue
+                                # Only add tokens with non-zero balance
+                                if balance > 0:
+                                    balances[token_key] = {
+                                        'amount': balance,
+                                        'symbol': symbol,
+                                        'contract_address': address,
+                                        'decimals': decimals
+                                    }
+                                    logger.info(f"Added token {symbol} with balance {balance}")
+                                    
+                            except Exception as e:
+                                symbol = token.get('token', {}).get('symbol', 'unknown')
+                                logger.warning(f"Error processing token {symbol}: {str(e)}")
+                                logger.debug(f"Problematic token data: {json.dumps(token, indent=2)}")
+                                continue
+                else:
+                    logger.warning(f"Blockscout API returned status {response.status}")
+                    response_text = await response.text()
+                    logger.warning(f"Response: {response_text}")
             
             # Cache results if we have any
             if balances:
@@ -413,13 +407,13 @@ class BlockchainDataProvider:
             raise BlockchainDataError(f"Failed to get token balances: {str(e)}")
         
     async def get_token_prices(self, tokens: Dict[str, Dict]) -> Dict[str, float]:
-        """Get token prices in USD using CoinGecko API with contract addresses"""
+        """Get token prices in USD using Uniswap V3 on Base"""
         cache_key = f"token_prices:{','.join(sorted(tokens.keys()))}"
         logger.info(f"Getting prices for tokens: {list(tokens.keys())}")
         
         if cached_data := await self.memory_cache.get(cache_key):
             return cached_data
-            
+                
         try:
             prices = {}
             
@@ -428,71 +422,199 @@ class BlockchainDataProvider:
                 eth_price = await self.get_eth_price()
                 logger.info(f"ETH price: ${eth_price}")
                 prices['ETH'] = eth_price
-                # Set same price for ETH derivatives
-                for token_key, token_data in tokens.items():
-                    if token_data['symbol'] in ['WETH', 'stETH', 'ETHx']:
-                        prices[token_key] = eth_price
-            
-            # Get prices for other tokens using contract addresses
-            contract_tokens = {
-                k: v for k, v in tokens.items() 
-                if v.get('contract_address') and k not in prices
-            }
-            
-            if contract_tokens:
-                session = await self.get_session()
-                
-                # Get Ethereum contract addresses
-                contract_addresses = [
-                    v['contract_address'] 
-                    for v in contract_tokens.values()
-                ]
-                
-                if contract_addresses:
+
+            # Uniswap V3 Factory ABI
+            factory_abi = [
+                {
+                    "inputs": [
+                        {"internalType": "address", "name": "tokenA", "type": "address"},
+                        {"internalType": "address", "name": "tokenB", "type": "address"},
+                        {"internalType": "uint24", "name": "fee", "type": "uint24"}
+                    ],
+                    "name": "getPool",
+                    "outputs": [{"internalType": "address", "name": "", "type": "address"}],
+                    "stateMutability": "view",
+                    "type": "function"
+                }
+            ]
+
+            # Uniswap V3 Pool ABI
+            pool_abi = [
+                {
+                    "inputs": [],
+                    "name": "slot0",
+                    "outputs": [
+                        {"internalType": "uint160", "name": "sqrtPriceX96", "type": "uint160"},
+                        {"internalType": "int24", "name": "tick", "type": "int24"},
+                        {"internalType": "uint16", "name": "observationIndex", "type": "uint16"},
+                        {"internalType": "uint16", "name": "observationCardinality", "type": "uint16"},
+                        {"internalType": "uint16", "name": "observationCardinalityNext", "type": "uint16"},
+                        {"internalType": "uint8", "name": "feeProtocol", "type": "uint8"},
+                        {"internalType": "bool", "name": "unlocked", "type": "bool"}
+                    ],
+                    "stateMutability": "view",
+                    "type": "function"
+                },
+                {
+                    "inputs": [],
+                    "name": "token0",
+                    "outputs": [{"internalType": "address", "name": "", "type": "address"}],
+                    "stateMutability": "view",
+                    "type": "function"
+                },
+                {
+                    "inputs": [],
+                    "name": "token1",
+                    "outputs": [{"internalType": "address", "name": "", "type": "address"}],
+                    "stateMutability": "view",
+                    "type": "function"
+                }
+            ]
+
+            # Uniswap V3 Factory address on Base
+            factory_address = "0x33128a8fC17869897dcE68Ed026d694621f6FDfD"
+            factory_contract = self.w3.eth.contract(
+                address=Web3.to_checksum_address(factory_address),
+                abi=factory_abi
+            )
+
+            # WETH and USDC addresses on Base
+            weth_address = "0x4200000000000000000000000000000000000006"
+            usdc_address = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+
+            # Common pool fees in Uniswap V3
+            fee_tiers = [100, 500, 3000, 10000]  # 0.01%, 0.05%, 0.3%, 1%
+
+            for token_key, token_data in tokens.items():
+                if token_key not in prices and token_data.get('contract_address'):
                     try:
-                        headers = {}
-                        if self.coingecko_api_key:
-                            headers['x-cg-demo-api-key'] = self.coingecko_api_key
-                        
-                        # Split into chunks of 100 addresses (CoinGecko limit)
-                        chunk_size = 100
-                        for i in range(0, len(contract_addresses), chunk_size):
-                            chunk = contract_addresses[i:i + chunk_size]
-                            
-                            params = {
-                                'contract_addresses': ','.join(chunk),
-                                'vs_currencies': 'usd',
-                            }
-                            
-                            async with session.get(
-                                'https://api.coingecko.com/api/v3/simple/token_price/ethereum',
-                                params=params,
-                                headers=headers
-                            ) as response:
-                                if response.status == 200:
-                                    data = await response.json()
+                        token_address = Web3.to_checksum_address(token_data['contract_address'])
+                        pool_found = False
+
+                        # Try different fee tiers with WETH
+                        for fee in fee_tiers:
+                            try:
+                                logger.info(f"Checking {token_key} with fee tier {fee}")
+                                pool_address = await factory_contract.functions.getPool(
+                                    token_address,
+                                    weth_address,
+                                    fee
+                                ).call()
+
+                                logger.info(f"Found pool address: {pool_address}")
+
+                                if pool_address and pool_address != "0x0000000000000000000000000000000000000000":
+                                    pool_contract = self.w3.eth.contract(
+                                        address=Web3.to_checksum_address(pool_address),
+                                        abi=pool_abi
+                                    )
+
+                                    # Get token order
+                                    logger.info(f"Getting token order for pool {pool_address}")
+                                    token0_address = await pool_contract.functions.token0().call()
+                                    token1_address = await pool_contract.functions.token1().call()
+                                    is_token0 = token_address.lower() == token0_address.lower()
+
+                                    logger.info(f"Token0: {token0_address}")
+                                    logger.info(f"Token1: {token1_address}")
+                                    logger.info(f"Is token0: {is_token0}")
+
+                                    # Get current price from slot0
+                                    logger.info("Getting slot0 data")
+                                    slot0 = await pool_contract.functions.slot0().call()
+                                    sqrt_price_x96 = slot0[0]
+                                    logger.info(slot0)
                                     
-                                    # Map prices back to token symbols
-                                    for token_key, token_data in contract_tokens.items():
-                                        contract = token_data['contract_address'].lower()
-                                        if contract in data and 'usd' in data[contract]:
-                                            prices[token_key] = data[contract]['usd']
+                                    # Calculate price from sqrtPriceX96
+                                    try:
+                                        token0_decimals = token_data['decimals'] if is_token0 else 18  # WETH decimals
+                                        token1_decimals = 18 if is_token0 else token_data['decimals']  # WETH decimals
+
+                                        if is_token0:
+                                            price = ((sqrt_price_x96 / (2**96))**2) / (10**token1_decimals / 10**token0_decimals)
                                         else:
-                                            prices[token_key] = 0
-                                else:
-                                    logger.warning(f"Failed to fetch prices from CoinGecko: {response.status}")
-                                    response_text = await response.text()
-                                    logger.warning(f"Response: {response_text}")
-                                    
+                                            price = ((sqrt_price_x96 / (2**96))**2) * (10**token0_decimals / 10**token1_decimals)
+
+                                        # Convert to USD
+                                        token_price = price * eth_price
+
+                                        # Add debug logging
+                                        logger.info(f"sqrtPriceX96: {sqrt_price_x96}")
+                                        logger.info(f"raw_price: {price}")
+                                        logger.info(f"eth_price: {eth_price}")
+                                        logger.info(f"Final USD price for {token_key}: ${token_price}")
+
+                                        # Sanity check - if price is unreasonable, set to 0
+                                        if token_price > 1000:  # Assuming no token should be worth more than $1000
+                                            logger.warning(f"Price seems unreasonable for {token_key}, setting to 0")
+                                            token_price = 0
+                                        
+                                        prices[token_key] = token_price
+                                        pool_found = True
+                                        break
+                                    except Exception as e:
+                                        logger.error(f"Error calculating price: {e}")
+                                        continue
+
+                            except Exception as e:
+                                logger.debug(f"Failed to get price from {fee} fee tier: {e}")
+                                continue
+
+                        if not pool_found:
+                            # Try USDC pairs if WETH pairs failed
+                            for fee in fee_tiers:
+                                try:
+                                    pool_address = await factory_contract.functions.getPool(
+                                        token_address,
+                                        usdc_address,
+                                        fee
+                                    ).call()
+
+                                    if pool_address and pool_address != "0x0000000000000000000000000000000000000000":
+                                        pool_contract = self.w3.eth.contract(
+                                            address=Web3.to_checksum_address(pool_address),
+                                            abi=pool_abi
+                                        )
+
+                                        token0_address = await pool_contract.functions.token0().call()
+                                        is_token0 = token_address.lower() == token0_address.lower()
+
+                                        slot0 = await pool_contract.functions.slot0().call()
+                                        sqrt_price_x96 = slot0[0]
+
+                                        token0_decimals = token_data['decimals'] if is_token0 else 6  # USDC decimals
+                                        token1_decimals = 6 if is_token0 else token_data['decimals']  # USDC decimals
+
+                                        if is_token0:
+                                            price = ((sqrt_price_x96 / (2**96))**2) / (10**token1_decimals / 10**token0_decimals)
+                                        else:
+                                            price = ((sqrt_price_x96 / (2**96))**2) * (10**token0_decimals / 10**token1_decimals)
+
+                                        token_price = price  # Already in USD since paired with USDC
+
+                                        logger.info(f"Got price for {token_key} from USDC pair: ${token_price}")
+                                        prices[token_key] = token_price
+                                        pool_found = True
+                                        break
+
+                                except Exception as e:
+                                    logger.debug(f"Failed to get price from USDC pair: {e}")
+                                    continue
+
+                        if not pool_found:
+                            logger.warning(f"No Uniswap V3 pools found for {token_key}")
+                            prices[token_key] = 0
+
                     except Exception as e:
-                        logger.error(f"Error fetching CoinGecko prices: {e}")
-            
+                        logger.warning(f"Failed to get price for {token_key}: {e}")
+                        prices[token_key] = 0
+
             # Cache the results
             if prices:
                 await self.memory_cache.set(cache_key, prices, ttl=300)
             logger.info(f"Final prices: {json.dumps(prices, indent=2)}")
             return prices
-                
+                    
         except Exception as e:
             logger.warning(f"Error fetching token prices: {e}")
             return prices
@@ -864,7 +986,7 @@ async def analyze_wallet(address: str) -> dict:
     
     provider = BlockchainDataProvider(
         web3_url=os.getenv('WEB3_URL'),
-        etherscan_api_key=os.getenv('ETHERSCAN_API_KEY'),
+        etherscan_api_key=os.getenv('BASESCAN_API_KEY'),
         coingecko_api_key=os.getenv('COINGECKO_API_KEY'),
         cache_config=cache_config
     )
