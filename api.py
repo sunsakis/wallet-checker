@@ -78,6 +78,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "https://www.walletchecker.xyz",
+        "https://xmsg-eta.vercel.app/",
         "http://localhost:5173",  # Vite's default dev port
         "http://localhost:5174"
     ],
