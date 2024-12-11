@@ -81,7 +81,8 @@ app.add_middleware(
         "https://xmsg-eta.vercel.app",
         "http://localhost:5173",  # Vite's default dev port
         "http://localhost:5174",
-        "http://localhost:3000"
+        "http://localhost:3000",
+        "https://04fa9510d1c0.ngrok.app/",
     ],
     allow_credentials=True,
     allow_methods=["*"],
