@@ -734,15 +734,15 @@ class EnhancedWalletAnalyzer:
         if isinstance(tx_df['timestamp'].iloc[0], str):
             tx_df['timestamp'] = pd.to_datetime(tx_df['timestamp'])
         
-        # Calculate monthly activity
-        tx_df['day'] = tx_df['timestamp'].dt.strftime('%b')
-        monthly_counts = tx_df.groupby('month').size().reset_index()
+        # Calculate daily activity
+        tx_df['day'] = tx_df['timestamp'].dt.strftime('%Y-%m-%d')  # Format: YYYY-MM-DD
+        daily_counts = tx_df.groupby('day').size().reset_index()
         activity_history = [
             {
-                "month": row['month'],
-                "count": int(row[0])  # Change back to 'count'
+                "day": row['day'],
+                "count": int(row[0])
             }
-            for _, row in monthly_counts.iterrows()
+            for _, row in daily_counts.iterrows()
         ]
         
         # Get last active time and calculate time difference
