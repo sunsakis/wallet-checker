@@ -329,7 +329,7 @@ const WalletProfile = ({ profile, metrics }) => {
             <div className="h-64">
                 <ResponsiveContainer width="100%" height="100%">
                     <LineChart data={data}>
-                        <XAxis dataKey="day" />
+                        <XAxis dataKey="month" />
                         <YAxis />
                         <Tooltip />
                         <Line 

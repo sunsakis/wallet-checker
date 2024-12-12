@@ -41,7 +41,7 @@ class Portfolio(BaseModel):
     usdc_percentage: float
 
 class ActivityPoint(BaseModel):
-    day: str
+    month: str
     transactions: int
 
 class Profitability(BaseModel): 
